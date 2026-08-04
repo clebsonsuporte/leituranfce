@@ -1,0 +1,297 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  email     String   @unique
+  password  String
+  role      Role     @default(OPERATOR)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+  OPERATOR
+}
+
+model Company {
+  id        String   @id @default(cuid())
+  cnpj      String   @unique
+  name      String
+  fantasia  String?
+  regime    String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  nfes         Nfe[]
+  importLogs   ImportLog[]
+  emailContacts CompanyEmail[]
+  certificate  CompanyCertificate?
+  dfeSyncLogs  DfeSyncLog[]
+
+  @@map("companies")
+}
+
+model CompanyCertificate {
+  id          String    @id @default(cuid())
+  companyId   String    @unique
+  cnpj        String
+  cUFAutor    Int
+  pfxData     Bytes
+  pfxPassword String
+  validFrom   DateTime
+  validUntil  DateTime
+  active      Boolean   @default(true)
+  lastNsu     String    @default("000000000000000")
+  lastSyncAt  DateTime?
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("company_certificates")
+}
+
+model DfeSyncLog {
+  id          String       @id @default(cuid())
+  companyId   String
+  startNsu    String
+  endNsu      String?
+  docsFound   Int          @default(0)
+  docsSummary Int          @default(0)
+  status      ImportStatus @default(PROCESSING)
+  message     String?
+  importLogId String?
+
+  company   Company    @relation(fields: [companyId], references: [id])
+  importLog ImportLog? @relation(fields: [importLogId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId, createdAt])
+  @@map("dfe_sync_logs")
+}
+
+// ─── E-mail ───────────────────────────────────────────────────────────────────
+
+model EmailSettings {
+  id        String   @id @default(cuid())
+  host      String   @default("smtp.kinghost.net")
+  port      Int      @default(587)
+  secure    Boolean  @default(false)
+  user      String
+  password  String
+  fromName  String   @default("Fiscal Dashboard")
+  fromEmail String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("email_settings")
+}
+
+model CompanyEmail {
+  id        String   @id @default(cuid())
+  companyId String
+  email     String
+  name      String?
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([companyId, email])
+  @@index([companyId])
+  @@map("company_emails")
+}
+
+model Nfe {
+  id          String    @id @default(cuid())
+  companyId   String
+  chNFe       String    @unique
+  xmlHash     String    @unique
+  mod         Int
+  serie       String
+  nNF         String
+  dhEmi       DateTime
+  competencia String
+  tpNF        Int
+  natOp       String?
+  emitCnpj    String
+  emitNome    String
+  emitUF      String?
+  destCnpj    String?
+  destCpf     String?
+  destNome    String?
+  vProd       Decimal   @db.Decimal(15, 2)
+  vDesc       Decimal   @db.Decimal(15, 2) @default(0)
+  vNF         Decimal   @db.Decimal(15, 2)
+  vICMS       Decimal   @db.Decimal(15, 2) @default(0)
+  vICMSST     Decimal   @db.Decimal(15, 2) @default(0)
+  vIPI        Decimal   @db.Decimal(15, 2) @default(0)
+  vPIS        Decimal   @db.Decimal(15, 2) @default(0)
+  vCOFINS     Decimal   @db.Decimal(15, 2) @default(0)
+  vFrete      Decimal   @db.Decimal(15, 2) @default(0)
+  status      NfeStatus @default(AUTORIZADA)
+  xmlRaw      String    @db.Text
+  importLogId String?
+
+  company   Company    @relation(fields: [companyId], references: [id])
+  importLog ImportLog? @relation(fields: [importLogId], references: [id])
+  items     NfeItem[]
+  events    NfeEvent[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId, competencia])
+  @@index([emitCnpj, competencia])
+  @@index([destCnpj])
+  @@index([status])
+  @@map("nfes")
+}
+
+enum NfeStatus {
+  AUTORIZADA
+  CANCELADA
+  DENEGADA
+  INUTILIZADA
+}
+
+model NfeItem {
+  id        String  @id @default(cuid())
+  nfeId     String
+  nItem     Int
+  cProd     String?
+  xProd     String
+  ncm       String?
+  cfop      String
+  uCom      String?
+  qCom      Decimal @db.Decimal(15, 4)
+  vUnCom    Decimal @db.Decimal(15, 4)
+  vProd     Decimal @db.Decimal(15, 2)
+  vDesc     Decimal @db.Decimal(15, 2) @default(0)
+  cstIcms   String?
+  csosnIcms String?
+  vBCIcms   Decimal @db.Decimal(15, 2) @default(0)
+  pICMS     Decimal @db.Decimal(7, 4) @default(0)
+  vICMS     Decimal @db.Decimal(15, 2) @default(0)
+  vST       Decimal @db.Decimal(15, 2) @default(0)
+  cstPis    String?
+  vPIS      Decimal @db.Decimal(15, 2) @default(0)
+  cstCofins String?
+  vCOFINS   Decimal @db.Decimal(15, 2) @default(0)
+  vIPI      Decimal @db.Decimal(15, 2) @default(0)
+  tribIcms  String?
+  tribPis   String?
+
+  nfe Nfe @relation(fields: [nfeId], references: [id], onDelete: Cascade)
+
+  @@index([nfeId])
+  @@index([ncm])
+  @@index([cfop])
+  @@map("nfe_items")
+}
+
+model NfeEvent {
+  id         String   @id @default(cuid())
+  nfeId      String
+  tpEvento   String
+  nSeqEvento Int
+  dhEvento   DateTime
+  xMotivo    String?
+  nProt      String?
+
+  nfe Nfe @relation(fields: [nfeId], references: [id], onDelete: Cascade)
+
+  @@map("nfe_events")
+}
+
+// Eventos (cancelamento/inutilização) recebidos antes da NF-e correspondente
+// ser importada. Aplicados retroativamente quando a Nfe com o chNFe aparece.
+model PendingNfeEvent {
+  id         String   @id @default(cuid())
+  chNFe      String
+  tpEvento   String
+  nSeqEvento Int
+  dhEvento   DateTime
+  xMotivo    String?
+  nProt      String?
+  createdAt  DateTime @default(now())
+
+  @@unique([chNFe, tpEvento, nSeqEvento])
+  @@index([chNFe])
+  @@map("pending_nfe_events")
+}
+
+model ImportLog {
+  id         String       @id @default(cuid())
+  companyId  String?
+  filename   String
+  totalFiles Int          @default(0)
+  processed  Int          @default(0)
+  success    Int          @default(0)
+  duplicates Int          @default(0)
+  errors     Int          @default(0)
+  status     ImportStatus @default(PROCESSING)
+  details    Json?
+
+  company Company? @relation(fields: [companyId], references: [id])
+  nfes    Nfe[]
+  dfeSyncLogs DfeSyncLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("import_logs")
+}
+
+enum ImportStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model Alert {
+  id        String        @id @default(cuid())
+  companyId String?
+  type      AlertType
+  severity  AlertSeverity @default(WARNING)
+  title     String
+  message   String
+  data      Json?
+  read      Boolean       @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([companyId, read])
+  @@map("alerts")
+}
+
+enum AlertType {
+  DUPLICATE_XML
+  MISSING_NOTE
+  TAX_DIVERGENCE
+  SEQUENCE_BREAK
+  IMPORT_ERROR
+  FISCAL_AUDIT
+}
+
+enum AlertSeverity {
+  INFO
+  WARNING
+  ERROR
+  CRITICAL
+}
