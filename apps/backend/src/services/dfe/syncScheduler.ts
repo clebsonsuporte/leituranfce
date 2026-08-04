@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync } from 'fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import prisma from '../../lib/prisma.js'
@@ -6,6 +6,9 @@ import { runDistributionSync } from './distributionService.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const CONFIG_PATH = path.resolve(__dirname, '../../../data/dfe-sync-config.json')
+// data/ é gitignored — precisa existir antes do primeiro writeFileSync em
+// deploys novos (ver mesmo problema corrigido em driveWatcher.ts).
+mkdirSync(path.dirname(CONFIG_PATH), { recursive: true })
 
 export interface CompanySyncConfig {
   enabled: boolean

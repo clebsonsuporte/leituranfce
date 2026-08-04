@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync } from 'fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { listClientFolders, listRootFiles, walkDriveFolder, downloadDriveFile, type DriveFileRef } from './driveClient.js'
@@ -8,6 +8,11 @@ import prisma from '../../lib/prisma.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const CONFIG_PATH = path.resolve(__dirname, '../../../data/drive-watcher-config.json')
+// data/ é gitignored (é estado de runtime, não deve ser versionado) — mas
+// isso significa que num deploy novo (Railway, etc.) a pasta simplesmente
+// não existe, e writeFileSync falhava em silêncio (só logava e seguia),
+// fazendo o "iniciar" parecer funcionar sem nada ser salvo de verdade.
+mkdirSync(path.dirname(CONFIG_PATH), { recursive: true })
 
 // Drive não tem um cooldown como a SEFAZ (que limita o DFe a 30-60min) —
 // 15min é só para não bater na cota de leitura da API à toa.

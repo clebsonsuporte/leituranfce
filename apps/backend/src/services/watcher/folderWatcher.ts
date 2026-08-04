@@ -1,5 +1,5 @@
 import chokidar, { type FSWatcher } from 'chokidar'
-import { readFileSync, writeFileSync, existsSync, readFile } from 'fs'
+import { readFileSync, writeFileSync, existsSync, readFile, mkdirSync } from 'fs'
 import { promisify } from 'util'
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -10,6 +10,9 @@ import prisma from '../../lib/prisma.js'
 const readFileAsync = promisify(readFile)
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const CONFIG_PATH = path.resolve(__dirname, '../../../data/watcher-config.json')
+// data/ é gitignored — precisa existir antes do primeiro writeFileSync em
+// deploys novos (ver mesmo problema corrigido em driveWatcher.ts).
+mkdirSync(path.dirname(CONFIG_PATH), { recursive: true })
 
 export interface WatcherConfig {
   enabled: boolean
