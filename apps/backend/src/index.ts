@@ -1,6 +1,10 @@
 import Fastify from 'fastify'
 import fastifyMultipart from '@fastify/multipart'
 import fastifyCookie from '@fastify/cookie'
+import fastifyStatic from '@fastify/static'
+import { existsSync } from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
 import bcrypt from 'bcryptjs'
 import authPlugin from './plugins/auth.js'
 import corsPlugin from './plugins/cors.js'
@@ -26,6 +30,11 @@ import { initDfeSync } from './services/dfe/syncScheduler.js'
 
 const PORT = parseInt(process.env.PORT || '3001', 10)
 const HOST = process.env.HOST || '0.0.0.0'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+// Build do frontend (Vite) — só existe em produção, gerado por `npm run build`
+// no monorepo. Em dev, o próprio Vite serve o frontend (com proxy de /api).
+const FRONTEND_DIST = path.resolve(__dirname, '../../frontend/dist')
 
 async function buildApp() {
   const fastify = Fastify({
@@ -75,6 +84,21 @@ async function buildApp() {
     },
     { prefix: '/api' }
   )
+
+  // Serve o build do frontend a partir do próprio backend, para não depender
+  // de dois serviços/origens separados em produção (o frontend chama a API
+  // via caminho relativo /api, então precisam estar no mesmo domínio).
+  if (existsSync(FRONTEND_DIST)) {
+    await fastify.register(fastifyStatic, { root: FRONTEND_DIST })
+
+    fastify.setNotFoundHandler((request, reply) => {
+      if (request.raw.url?.startsWith('/api')) {
+        return reply.status(404).send({ error: 'Not found' })
+      }
+      // SPA: qualquer rota não-API cai no index.html (roteamento no client)
+      return reply.sendFile('index.html')
+    })
+  }
 
   // Global error handler
   fastify.setErrorHandler((error, request, reply) => {

@@ -4,7 +4,8 @@
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
     "dev": "concurrently \"npm run dev --workspace=apps/backend\" \"npm run dev --workspace=apps/frontend\"",
-    "build": "npm run build --workspace=apps/backend && npm run build --workspace=apps/frontend"
+    "build": "npm run build --workspace=apps/backend && npm run build --workspace=apps/frontend",
+    "start": "npm run db:push --workspace=apps/backend && npm run start --workspace=apps/backend"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"
