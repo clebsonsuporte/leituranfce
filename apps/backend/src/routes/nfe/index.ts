@@ -104,6 +104,49 @@ const nfeRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send(analysis)
   })
 
+  // POST /nfe/backfill-protocol-status - correção única: alguns XMLs
+  // importados (achado real: nota 21274, E.GREGORIO LIMA-AUTO-PECAS,
+  // jul/2026) são o <NFe> assinado pelo emitente SEM o <protNFe> da SEFAZ —
+  // o parser antigo tratava a ausência de cStat como AUTORIZADA por padrão.
+  // Reescaneia as notas hoje marcadas AUTORIZADA e corrige para
+  // SEM_PROTOCOLO as que não têm <protNFe>/<nfeProc> no xmlRaw. Idempotente
+  // — pode rodar de novo sem efeito colateral.
+  fastify.post('/backfill-protocol-status', { preHandler: [fastify.authenticate] }, async (_request, reply) => {
+    const BATCH_SIZE = 500
+    let cursor: string | undefined
+    let scanned = 0
+    let corrected = 0
+    const exemplos: { id: string; nNF: string; serie: string; emitNome: string }[] = []
+
+    for (;;) {
+      const batch = await prisma.nfe.findMany({
+        where: { status: 'AUTORIZADA' },
+        select: { id: true, xmlRaw: true, nNF: true, serie: true, emitNome: true, companyId: true },
+        take: BATCH_SIZE,
+        ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
+        orderBy: { id: 'asc' },
+      })
+      if (batch.length === 0) break
+
+      for (const nfe of batch) {
+        scanned++
+        const temProtocolo = nfe.xmlRaw.includes('<protNFe') || nfe.xmlRaw.includes('<nfeProc')
+        if (!temProtocolo) {
+          await prisma.nfe.update({ where: { id: nfe.id }, data: { status: 'SEM_PROTOCOLO' } })
+          corrected++
+          if (exemplos.length < 30) {
+            exemplos.push({ id: nfe.id, nNF: nfe.nNF, serie: nfe.serie, emitNome: nfe.emitNome })
+          }
+        }
+      }
+
+      cursor = batch[batch.length - 1].id
+      if (batch.length < BATCH_SIZE) break
+    }
+
+    return reply.send({ scanned, corrected, exemplos })
+  })
+
   // DELETE /nfe/:id
   fastify.delete('/:id', { preHandler: [fastify.authenticate] }, async (request, reply) => {
     const { id } = request.params as { id: string }

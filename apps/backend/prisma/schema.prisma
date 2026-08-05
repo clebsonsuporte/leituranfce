@@ -168,6 +168,7 @@ enum NfeStatus {
   CANCELADA
   DENEGADA
   INUTILIZADA
+  SEM_PROTOCOLO
 }
 
 model NfeItem {

@@ -65,8 +65,8 @@ export async function generateEntradasSaidasReport(filters: ReportFilters): Prom
     ? (() => { const [y, m] = filters.competencia.split('-'); return `01/${m}/${y} a ${new Date(Number(y), Number(m), 0).getDate()}/${m}/${y}` })()
     : 'Todos os períodos'
 
-  const saidas = nfes.filter((n) => n.tpNF === 1 && n.status !== 'CANCELADA' && n.status !== 'INUTILIZADA')
-  const entradas = nfes.filter((n) => n.tpNF === 0 && n.status !== 'CANCELADA' && n.status !== 'INUTILIZADA')
+  const saidas = nfes.filter((n) => n.tpNF === 1 && n.status !== 'CANCELADA' && n.status !== 'INUTILIZADA' && n.status !== 'SEM_PROTOCOLO')
+  const entradas = nfes.filter((n) => n.tpNF === 0 && n.status !== 'CANCELADA' && n.status !== 'INUTILIZADA' && n.status !== 'SEM_PROTOCOLO')
   const canceladas = nfes.filter((n) => n.status === 'CANCELADA')
   const autorizadas = [...saidas, ...entradas].sort((a, b) => Number(a.nNF) - Number(b.nNF))
 
@@ -106,7 +106,7 @@ export async function generateEntradasSaidasReport(filters: ReportFilters): Prom
   // de checkSequenceBreaks, mas calculada aqui só para exibir no relatório) ──
   const bySerie = new Map<string, { mod: number; serie: string; nums: number[] }>()
   for (const n of nfes) {
-    if (n.status === 'CANCELADA') continue
+    if (n.status === 'CANCELADA' || n.status === 'SEM_PROTOCOLO') continue
     const key = `${n.mod}-${n.serie}`
     const entry = bySerie.get(key) ?? { mod: n.mod, serie: n.serie, nums: [] }
     const num = parseInt(n.nNF, 10)

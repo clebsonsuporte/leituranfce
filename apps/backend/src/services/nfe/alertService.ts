@@ -6,7 +6,7 @@ export async function checkSequenceBreaks(companyId: string, competencia: string
     where: {
       companyId,
       competencia,
-      status: { not: 'CANCELADA' },
+      status: { notIn: ['CANCELADA', 'SEM_PROTOCOLO'] },
     },
     select: { nNF: true, serie: true, mod: true },
     orderBy: { nNF: 'asc' },
@@ -58,6 +58,19 @@ export async function checkTaxDivergences(nfeId: string, companyId: string): Pro
   })
 
   if (!nfe) return
+
+  if (nfe.status === 'SEM_PROTOCOLO') {
+    await prisma.alert.create({
+      data: {
+        companyId,
+        type: 'IMPORT_ERROR',
+        severity: 'WARNING',
+        title: `NF-e ${nfe.nNF} sem protocolo de autorização`,
+        message: `O XML importado da NF-e ${nfe.nNF} (série ${nfe.serie}) é o documento assinado pelo emitente, mas não contém o protocolo de autorização da SEFAZ (sem cStat/nProt). Não há confirmação de que esta nota foi realmente autorizada — procure o arquivo correto (nfeProc/procNFe) ou confira a situação diretamente no site da SEFAZ.`,
+        data: { nfeId, chNFe: nfe.chNFe, nNF: nfe.nNF, serie: nfe.serie },
+      },
+    })
+  }
 
   const sumVICMS = nfe.items.reduce((acc, i) => acc + Number(i.vICMS), 0)
   const sumVPIS = nfe.items.reduce((acc, i) => acc + Number(i.vPIS), 0)

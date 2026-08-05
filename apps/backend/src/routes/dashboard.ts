@@ -21,12 +21,12 @@ const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       previousTotals,
     ] = await Promise.all([
       prisma.nfe.count({ where }),
-      prisma.nfe.count({ where: { ...where, tpNF: 0, status: { not: 'CANCELADA' } } }),
-      prisma.nfe.count({ where: { ...where, tpNF: 1, status: { not: 'CANCELADA' } } }),
+      prisma.nfe.count({ where: { ...where, tpNF: 0, status: { notIn: ['CANCELADA', 'SEM_PROTOCOLO'] } } }),
+      prisma.nfe.count({ where: { ...where, tpNF: 1, status: { notIn: ['CANCELADA', 'SEM_PROTOCOLO'] } } }),
       prisma.nfe.count({ where: { ...where, status: 'CANCELADA' } }),
       prisma.nfe.count({ where: { ...where, mod: 65 } }),
       prisma.nfe.aggregate({
-        where: { ...where, status: { not: 'CANCELADA' } },
+        where: { ...where, status: { notIn: ['CANCELADA', 'SEM_PROTOCOLO'] } },
         _sum: {
           vNF: true,
           vProd: true,
@@ -48,7 +48,7 @@ const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
               where: {
                 ...(query.companyId ? { companyId: query.companyId } : {}),
                 competencia: prevComp,
-                status: { not: 'CANCELADA' },
+                status: { notIn: ['CANCELADA', 'SEM_PROTOCOLO'] },
               },
               _sum: { vNF: true },
             })
@@ -101,12 +101,12 @@ const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
 
       const [entrada, saida] = await Promise.all([
         prisma.nfe.aggregate({
-          where: { ...baseWhere, competencia, tpNF: 0, status: { not: 'CANCELADA' } },
+          where: { ...baseWhere, competencia, tpNF: 0, status: { notIn: ['CANCELADA', 'SEM_PROTOCOLO'] } },
           _sum: { vNF: true },
           _count: true,
         }),
         prisma.nfe.aggregate({
-          where: { ...baseWhere, competencia, tpNF: 1, status: { not: 'CANCELADA' } },
+          where: { ...baseWhere, competencia, tpNF: 1, status: { notIn: ['CANCELADA', 'SEM_PROTOCOLO'] } },
           _sum: { vNF: true },
           _count: true,
         }),
@@ -196,7 +196,7 @@ const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get('/tax-breakdown', { preHandler: [fastify.authenticate] }, async (request, reply) => {
     const query = request.query as { companyId?: string; competencia?: string }
 
-    const where: Record<string, unknown> = { status: { not: 'CANCELADA' } }
+    const where: Record<string, unknown> = { status: { notIn: ['CANCELADA', 'SEM_PROTOCOLO'] } }
     if (query.companyId) where.companyId = query.companyId
     if (query.competencia) where.competencia = query.competencia
 
@@ -259,7 +259,7 @@ const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get('/missing-notes', { preHandler: [fastify.authenticate] }, async (request, reply) => {
     const query = request.query as { companyId?: string; competencia?: string }
 
-    const where: Record<string, unknown> = { status: { not: 'CANCELADA' } }
+    const where: Record<string, unknown> = { status: { notIn: ['CANCELADA', 'SEM_PROTOCOLO'] } }
     if (query.companyId) where.companyId = query.companyId
     if (query.competencia) where.competencia = query.competencia
 
@@ -312,7 +312,7 @@ const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     const query = request.query as { companyId?: string; competencia?: string; limit?: string }
     const limit = parseInt(query.limit || '10', 10)
 
-    const where: Record<string, unknown> = { tpNF: 1, status: { not: 'CANCELADA' } }
+    const where: Record<string, unknown> = { tpNF: 1, status: { notIn: ['CANCELADA', 'SEM_PROTOCOLO'] } }
     if (query.companyId) where.companyId = query.companyId
     if (query.competencia) where.competencia = query.competencia
 

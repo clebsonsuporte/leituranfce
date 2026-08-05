@@ -93,6 +93,7 @@ export function getStatusColor(status: string): string {
     case 'CANCELADA': return 'text-red-700 bg-red-100'
     case 'DENEGADA': return 'text-orange-700 bg-orange-100'
     case 'INUTILIZADA': return 'text-gray-700 bg-gray-100'
+    case 'SEM_PROTOCOLO': return 'text-amber-700 bg-amber-100'
     default: return 'text-gray-700 bg-gray-100'
   }
 }
@@ -103,6 +104,7 @@ export function getStatusLabel(status: string): string {
     case 'CANCELADA': return 'Cancelada'
     case 'DENEGADA': return 'Denegada'
     case 'INUTILIZADA': return 'Inutilizada'
+    case 'SEM_PROTOCOLO': return 'Sem protocolo SEFAZ'
     default: return status
   }
 }

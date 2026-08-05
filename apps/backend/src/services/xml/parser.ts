@@ -60,7 +60,7 @@ export interface ParsedNfe {
   vPIS: number
   vCOFINS: number
   vFrete: number
-  status: 'AUTORIZADA' | 'CANCELADA' | 'DENEGADA' | 'INUTILIZADA'
+  status: 'AUTORIZADA' | 'CANCELADA' | 'DENEGADA' | 'INUTILIZADA' | 'SEM_PROTOCOLO'
   items: ParsedNfeItem[]
   events: ParsedNfeEvent[]
   xmlRaw: string
@@ -119,7 +119,14 @@ function toCompetencia(date: Date): string {
 // cStat 101/151, comum em downloads via Distribuição DFe) entrava como
 // AUTORIZADA e só era corrigida se um evento de cancelamento separado
 // também fosse importado.
-function statusFromCStat(cStat: string | undefined): 'AUTORIZADA' | 'CANCELADA' | 'DENEGADA' {
+//
+// Achado real (nota 21274, E.GREGORIO LIMA-AUTO-PECAS, jul/2026): alguns
+// arquivos salvos pelo PDV do emitente são o <NFe> assinado SEM o <protNFe>
+// da SEFAZ (sem cStat, sem nProt) — não é a prova de autorização, é só o
+// documento que o emitente gerou antes de transmitir. Sem protocolo não há
+// como confirmar que a SEFAZ realmente autorizou; antes isso caía no
+// `default` e virava AUTORIZADA por engano. Agora vira SEM_PROTOCOLO.
+function statusFromCStat(cStat: string | undefined): 'AUTORIZADA' | 'CANCELADA' | 'DENEGADA' | 'SEM_PROTOCOLO' {
   switch (cStat) {
     case '100':
     case '150':
@@ -131,6 +138,8 @@ function statusFromCStat(cStat: string | undefined): 'AUTORIZADA' | 'CANCELADA' 
     case '301':
     case '302':
       return 'DENEGADA'
+    case undefined:
+      return 'SEM_PROTOCOLO'
     default:
       return 'AUTORIZADA'
   }
