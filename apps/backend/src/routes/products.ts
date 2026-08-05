@@ -28,7 +28,10 @@ const productsRoutes: FastifyPluginAsync = async (fastify) => {
     if (query.ncm) whereItem.ncm = query.ncm
     if (query.cfop) whereItem.cfop = query.cfop
     if (query.search) {
-      whereItem.xProd = { contains: query.search, mode: 'insensitive' }
+      whereItem.OR = [
+        { xProd: { contains: query.search, mode: 'insensitive' } },
+        { ncm: { contains: query.search } },
+      ]
     }
 
     const sortBy = (query.sortBy || 'vProd') as string

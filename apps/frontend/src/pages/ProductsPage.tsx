@@ -134,7 +134,7 @@ export default function ProductsPage() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
           <input
             type="text"
-            placeholder="Buscar produto..."
+            placeholder="Buscar por produto ou NCM..."
             value={search}
             onChange={(e) => { setSearch(e.target.value); setPage(1) }}
             className="h-9 w-full pl-9 pr-3 rounded-md border border-gray-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
