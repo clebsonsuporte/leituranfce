@@ -272,14 +272,16 @@ async function htmlToPdf(html: string): Promise<Buffer> {
   const browser = await puppeteer.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+    protocolTimeout: 300_000,
   })
 
   try {
     const page = await browser.newPage()
-    await page.setContent(html, { waitUntil: 'networkidle0' })
+    await page.setContent(html, { waitUntil: 'networkidle0', timeout: 120_000 })
     const pdf = await page.pdf({
       format: 'A4',
       printBackground: true,
+      timeout: 180_000,
       margin: { top: '15mm', right: '10mm', bottom: '15mm', left: '10mm' },
     })
     return Buffer.from(pdf)

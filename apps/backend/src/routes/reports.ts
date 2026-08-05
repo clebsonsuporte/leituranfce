@@ -107,7 +107,16 @@ const reportsRoutes: FastifyPluginAsync = async (fastify) => {
       }
     } catch (err) {
       console.error('Report generation error:', err)
-      return reply.status(500).send({ error: 'Failed to generate report', details: (err as Error).message })
+      const rawMessage = (err as Error).message || ''
+      // "Protocol error (Page.printToPDF): Printing failed" e afins vêm do
+      // Chrome/Puppeteer abortando a geração de um PDF grande demais (achado
+      // real: relatório com ~5.200 notas) — mensagem mais clara e acionável
+      // do que o erro cru do protocolo do Chrome.
+      const isPdfEngineFailure = /printToPDF|Printing failed|Target closed|Protocol error/i.test(rawMessage)
+      const details = isPdfEngineFailure
+        ? 'O relatório deste período tem muitas notas para gerar de uma vez. Tente filtrar por um intervalo menor (ex: quinzenal) ou gerar em CSV/Excel.'
+        : rawMessage
+      return reply.status(500).send({ error: 'Failed to generate report', details })
     }
 
     // Store with expiry

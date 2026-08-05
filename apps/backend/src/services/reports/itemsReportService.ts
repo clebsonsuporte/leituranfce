@@ -282,17 +282,24 @@ ${faltantesGrupos.length > 0 ? `
 </body></html>`
 
   const puppeteer = (await import('puppeteer')).default
+  // Achado real (ADIJAEL, ~5.200 notas/mês): "Protocol error (Page.printToPDF):
+  // Printing failed" — bate exatamente no timeout padrão de 30s do page.pdf()
+  // (e o de navegação do setContent). Localmente, num servidor mais rápido,
+  // o mesmo volume gera em ~6s; no container do Railway, mais lento/com menos
+  // recursos, o mesmo relatório grande passa dos 30s e o Puppeteer aborta.
   const browser = await puppeteer.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+    protocolTimeout: 300_000,
   })
   try {
     const page = await browser.newPage()
-    await page.setContent(html, { waitUntil: 'networkidle0' })
+    await page.setContent(html, { waitUntil: 'networkidle0', timeout: 120_000 })
     const headerLabel = `Relatório de Documentos Fiscais — ${competenciaLabel}`
     const pdf = await page.pdf({
       format: 'A4',
       printBackground: true,
+      timeout: 180_000,
       margin: { top: '16mm', right: '10mm', bottom: '14mm', left: '10mm' },
       displayHeaderFooter: true,
       headerTemplate: `<div style="font-size:7px;color:#6b7280;width:100%;padding:0 10mm;display:flex;justify-content:space-between"><span>${headerLabel}</span><span>${generatedAt}</span></div>`,
@@ -457,13 +464,15 @@ export async function generatePisCofinsItemsReport(
   const browser = await puppeteer.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+    protocolTimeout: 300_000,
   })
   try {
     const page = await browser.newPage()
-    await page.setContent(html, { waitUntil: 'networkidle0' })
+    await page.setContent(html, { waitUntil: 'networkidle0', timeout: 120_000 })
     const pdf = await page.pdf({
       format: 'A4',
       landscape: true,
+      timeout: 180_000,
       printBackground: false,
       margin: { top: '12mm', right: '10mm', bottom: '12mm', left: '10mm' },
     })
