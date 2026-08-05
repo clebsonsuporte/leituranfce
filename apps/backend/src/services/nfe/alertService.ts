@@ -122,28 +122,29 @@ async function auditFiscalItems(
   nNF: string,
   tpNF: number,
   companyId: string,
-  items: { nItem: number; ncm: string | null; cfop: string; cstIcms: string | null; csosnIcms: string | null; vST: unknown }[]
+  items: { nItem: number; xProd: string; ncm: string | null; cfop: string; cstIcms: string | null; csosnIcms: string | null; vST: unknown }[]
 ): Promise<void> {
   for (const item of items) {
     const problems: string[] = []
+    const itemLabel = `item ${item.nItem} - ${item.xProd}`
 
     // 1) CFOP incompatível com o sentido da operação (tpNF: 0=entrada, 1=saída)
     const cfopDigit = item.cfop?.replace(/\D/g, '').charAt(0)
     if (cfopDigit) {
       const isEntrada = ['1', '2', '3'].includes(cfopDigit)
       const isSaida = ['5', '6', '7'].includes(cfopDigit)
-      if (tpNF === 1 && isEntrada) problems.push(`item ${item.nItem}: CFOP ${item.cfop} é de entrada numa nota de saída`)
-      if (tpNF === 0 && isSaida) problems.push(`item ${item.nItem}: CFOP ${item.cfop} é de saída numa nota de entrada`)
+      if (tpNF === 1 && isEntrada) problems.push(`${itemLabel}: CFOP ${item.cfop} é de entrada numa nota de saída`)
+      if (tpNF === 0 && isSaida) problems.push(`${itemLabel}: CFOP ${item.cfop} é de saída numa nota de entrada`)
     }
 
     // 2) ICMS sem CST nem CSOSN
     if (!item.cstIcms && !item.csosnIcms) {
-      problems.push(`item ${item.nItem}: sem CST nem CSOSN de ICMS`)
+      problems.push(`${itemLabel}: sem CST nem CSOSN de ICMS`)
     }
 
     // 3) NCM ausente ou fora do padrão (8 dígitos numéricos)
     if (!item.ncm || !/^\d{8}$/.test(item.ncm)) {
-      problems.push(`item ${item.nItem}: NCM ausente ou inválido (${item.ncm || '—'})`)
+      problems.push(`${itemLabel}: NCM ausente ou inválido (${item.ncm || '—'})`)
     }
 
     if (problems.length > 0) {
@@ -154,7 +155,7 @@ async function auditFiscalItems(
           severity: 'WARNING',
           title: `Inconsistência fiscal - NF-e ${nNF}`,
           message: problems.join('; '),
-          data: { nfeId, nItem: item.nItem, problems },
+          data: { nfeId, nItem: item.nItem, xProd: item.xProd, problems },
         },
       })
     }
@@ -173,8 +174,8 @@ async function auditFiscalItems(
             type: 'FISCAL_AUDIT',
             severity: 'INFO',
             title: `Possível ST não aplicada - NF-e ${nNF}`,
-            message: `Item ${item.nItem} (NCM ${item.ncm}, ${stMatch.descricao}) pode estar sujeito a Substituição Tributária (${stMatch.convenio}), mas não tem CST/CSOSN de ST nem valor de ICMS-ST destacado. Revisar se o convênio se aplica ao estado da operação.`,
-            data: { nfeId, nItem: item.nItem, ncm: item.ncm, convenio: stMatch.convenio },
+            message: `${itemLabel} (NCM ${item.ncm}, ${stMatch.descricao}) pode estar sujeito a Substituição Tributária (${stMatch.convenio}), mas não tem CST/CSOSN de ST nem valor de ICMS-ST destacado. Revisar se o convênio se aplica ao estado da operação.`,
+            data: { nfeId, nItem: item.nItem, xProd: item.xProd, ncm: item.ncm, convenio: stMatch.convenio },
           },
         })
       }
