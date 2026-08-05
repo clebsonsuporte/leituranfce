@@ -470,10 +470,30 @@ function parseEventXml(xmlContent: string): ParsedNfeEvent | null {
     normalizedParsed[cleanKey] = val
   }
 
+  const procEventoNFe = firstOf<Record<string, unknown>>(normalizedParsed.procEventoNFe)
+  const eventoCancNFe = firstOf<Record<string, unknown>>(normalizedParsed.eventoCancNFe)
+
+  // envEvento pode vir solto (arquivo só de pedido) ou aninhado dentro de
+  // procEventoNFe/eventoCancNFe (arquivo combinado pedido+resposta — achado
+  // real: cancelamento da NFC-e 9603, LOJAO GAIBU, jul/2026, onde <retEvento>
+  // é irmão direto de <envEvento> dentro de <procEventoNFe>, não embutido
+  // nele). Sem isso, `eventoRoot` nunca era encontrado e o evento inteiro
+  // era descartado (retornava null) mesmo já tendo cStat 135 homologado.
+  const envEvento =
+    (normalizedParsed.envEvento as Record<string, unknown>) ??
+    (procEventoNFe?.envEvento as Record<string, unknown>) ??
+    (eventoCancNFe?.envEvento as Record<string, unknown>)
+
   // 1) Resposta homologada da SEFAZ — única fonte confiável para mudar o
-  // status da nota (é onde mora o cStat). Sem isso, a nota nunca é corrigida.
+  // status da nota (é onde mora o cStat). Pode estar em retEnvEvento.retEvento
+  // (arquivo de resposta separado) ou em retEvento como irmão de envEvento
+  // dentro de procEventoNFe/eventoCancNFe (arquivo combinado).
   const retEnvEvento = normalizedParsed.retEnvEvento as Record<string, unknown>
-  const retEventoRaw = retEnvEvento?.retEvento ?? normalizedParsed.retEvento
+  const retEventoRaw =
+    retEnvEvento?.retEvento ??
+    normalizedParsed.retEvento ??
+    procEventoNFe?.retEvento ??
+    eventoCancNFe?.retEvento
   if (retEventoRaw) {
     const list = Array.isArray(retEventoRaw) ? retEventoRaw : [retEventoRaw]
     for (const re of list as Record<string, unknown>[]) {
@@ -490,11 +510,19 @@ function parseEventXml(xmlContent: string): ParsedNfeEvent | null {
       } catch {
         dhEvento = new Date()
       }
+      // xMotivo do retEvento costuma ser genérico ("Evento registrado e
+      // vinculado a NF-e") — prioriza a justificativa real do pedido
+      // (xJust), quando o envEvento correspondente estiver disponível.
+      const eventoRootForMotivo = firstOf<Record<string, unknown>>(envEvento?.evento)
+      const infEventoPedido = eventoRootForMotivo?.infEvento as Record<string, unknown> | undefined
+      const detEventoPedido = firstOf<Record<string, unknown>>(infEventoPedido?.detEvento)
+      const xMotivo = toStr(detEventoPedido?.xJust) || toStr(infEvento.xMotivo) || undefined
+
       return {
         tpEvento,
         nSeqEvento,
         dhEvento,
-        xMotivo: toStr(infEvento.xMotivo) || undefined,
+        xMotivo,
         nProt: toStr(infEvento.nProt) || undefined,
       }
     }
@@ -502,24 +530,14 @@ function parseEventXml(xmlContent: string): ParsedNfeEvent | null {
   }
 
   // 2) Pedido de evento assinado, ainda sem confirmação da SEFAZ (sem cStat).
-  // Não é suficiente para mudar o status da nota — só o retEnvEvento confirma.
-  const procEvento = firstOf<Record<string, unknown>>(
-    normalizedParsed.envEvento || normalizedParsed.procEventoNFe || normalizedParsed.eventoCancNFe
+  // Não é suficiente para mudar o status da nota — só o retEvento confirma.
+  const eventoRoot = firstOf<Record<string, unknown>>(
+    envEvento?.evento ?? normalizedParsed.evento ?? procEventoNFe?.evento ?? eventoCancNFe?.evento
   )
-  const eventoRoot = firstOf<Record<string, unknown>>(procEvento?.evento ?? normalizedParsed.evento)
   if (!eventoRoot) return null
 
   const infEvento = eventoRoot.infEvento as Record<string, unknown>
   if (!infEvento) return null
-
-  // Variante combinada (procEventoNFe com retEvento embutido) — se tiver
-  // cStat homologado ali, já podemos confiar nele.
-  const embeddedRet = firstOf<Record<string, unknown>>(procEvento?.retEvento)
-  const embeddedInfRet = embeddedRet?.infEvento as Record<string, unknown> | undefined
-  const embeddedCStat = toStr(embeddedInfRet?.cStat)
-  if (embeddedCStat !== '135' && embeddedCStat !== '155') {
-    return null
-  }
 
   const tpEvento = toStr(infEvento.tpEvento)
   const nSeqEvento = toNum(infEvento.nSeqEvento) || 1
@@ -531,9 +549,8 @@ function parseEventXml(xmlContent: string): ParsedNfeEvent | null {
   }
   const detEvento = firstOf<Record<string, unknown>>(infEvento.detEvento)
   const xMotivo = toStr(detEvento?.xJust) || toStr(detEvento?.xMotivo) || undefined
-  const nProt = toStr(embeddedInfRet?.nProt) || undefined
 
-  return { tpEvento, nSeqEvento, dhEvento, xMotivo, nProt }
+  return { tpEvento, nSeqEvento, dhEvento, xMotivo, nProt: undefined }
 }
 
 // Envelopes técnicos de web service da SEFAZ que aparecem nas mesmas pastas
