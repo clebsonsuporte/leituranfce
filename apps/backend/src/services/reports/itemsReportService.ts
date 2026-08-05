@@ -1,4 +1,3 @@
-import PDFDocument from 'pdfkit'
 import prisma from '../../lib/prisma.js'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
@@ -20,7 +19,32 @@ interface ReportFilters {
   competencia?: string
 }
 
-// ─── Relatório de Documentos Fiscais — gerado com PDFKit (compacto) ──────────
+// Junta números faltantes consecutivos numa faixa (ex.: 81105,81106 -> "81105-81106"),
+// mantendo números isolados como estão — mesmo formato do modelo de referência.
+function compactRanges(nums: number[]): string {
+  if (nums.length === 0) return ''
+  const sorted = [...nums].sort((a, b) => a - b)
+  const parts: string[] = []
+  let start = sorted[0]
+  let prev = sorted[0]
+  for (let i = 1; i <= sorted.length; i++) {
+    const cur = sorted[i]
+    if (cur === prev + 1) {
+      prev = cur
+      continue
+    }
+    parts.push(start === prev ? `${start}` : `${start}-${prev}`)
+    start = cur
+    prev = cur
+  }
+  return parts.join(', ')
+}
+
+// ─── Relatório de Documentos Fiscais (Entradas e Saídas) ─────────────────────
+// HTML + Puppeteer (mesmo padrão de generatePisCofinsItemsReport abaixo) —
+// reproduz o layout de referência do usuário: cards de resumo, tabela de
+// notas autorizadas com status, notas faltantes agrupadas por série/modelo
+// (com faixas compactadas) e um consolidado geral no final.
 
 export async function generateEntradasSaidasReport(filters: ReportFilters): Promise<Buffer> {
   const where: Record<string, unknown> = {}
@@ -36,181 +60,186 @@ export async function generateEntradasSaidasReport(filters: ReportFilters): Prom
     ? await prisma.company.findUnique({ where: { id: filters.companyId } })
     : null
 
-  const generatedAt = format(new Date(), 'dd/MM/yyyy HH:mm:ss', { locale: ptBR })
+  const generatedAt = format(new Date(), "dd/MM/yyyy, HH:mm", { locale: ptBR })
   const competenciaLabel = filters.competencia
-    ? (() => { const [y, m] = filters.competencia.split('-'); return `${m}/${y}` })()
+    ? (() => { const [y, m] = filters.competencia.split('-'); return `01/${m}/${y} a ${new Date(Number(y), Number(m), 0).getDate()}/${m}/${y}` })()
     : 'Todos os períodos'
 
-  const saidas    = nfes.filter(n => n.tpNF === 1 && n.status !== 'CANCELADA')
-  const entradas  = nfes.filter(n => n.tpNF === 0 && n.status !== 'CANCELADA')
-  const canceladas = nfes.filter(n => n.status === 'CANCELADA')
+  const saidas = nfes.filter((n) => n.tpNF === 1 && n.status !== 'CANCELADA' && n.status !== 'INUTILIZADA')
+  const entradas = nfes.filter((n) => n.tpNF === 0 && n.status !== 'CANCELADA' && n.status !== 'INUTILIZADA')
+  const canceladas = nfes.filter((n) => n.status === 'CANCELADA')
+  const autorizadas = [...saidas, ...entradas].sort((a, b) => Number(a.nNF) - Number(b.nNF))
 
-  const totalSaidas   = saidas.reduce((s, n) => s + Number(n.vNF), 0)
+  const totalSaidas = saidas.reduce((s, n) => s + Number(n.vNF), 0)
   const totalEntradas = entradas.reduce((s, n) => s + Number(n.vNF), 0)
-  const totalGeral    = totalSaidas + totalEntradas
+  const totalGeral = totalSaidas + totalEntradas
 
-  // ── PDFKit: PDF nativo, compacto, sem browser ──────────────────────────────
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = []
-    const doc = new PDFDocument({ size: 'A4', margin: 30, compress: true })
-
-    doc.on('data', (c: Buffer) => chunks.push(c))
-    doc.on('end', () => resolve(Buffer.concat(chunks)))
-    doc.on('error', reject)
-
-    // Constantes de layout
-    const PAGE_W = doc.page.width
-    const L = 30   // margem esquerda
-    const R = 30   // margem direita
-    const TW = PAGE_W - L - R  // largura útil (~535pt)
-
-    // Colunas: Emissão | Série | Número | Situação | Chave de acesso | Tipo | Valor (R$)
-    const cols = [
-      { label: 'Emissão',         w: 67,  align: 'left'  as const },
-      { label: 'Série',           w: 28,  align: 'center'as const },
-      { label: 'Número',          w: 42,  align: 'center'as const },
-      { label: 'Situação',        w: 62,  align: 'left'  as const },
-      { label: 'Chave de acesso', w: 258, align: 'left'  as const },
-      { label: 'Tipo',            w: 28,  align: 'center'as const },
-      { label: 'Valor (R$)',      w: TW - 67 - 28 - 42 - 62 - 258 - 28, align: 'right' as const },
-    ]
-
-    const ROW_H   = 12   // altura de cada linha de dados
-    const HDR_H   = 14   // altura da linha de cabeçalho da tabela
-    const FONT_SZ = 7    // fonte dados
-    const HDR_SZ  = 7    // fonte cabeçalho
-    const TOP_MARGIN = 30
-    const BOT_MARGIN = 30
-
-    // Helpers
-    const pageBottom = () => doc.page.height - BOT_MARGIN
-
-    function drawHeader() {
-      let y = TOP_MARGIN
-      // Título
-      doc.font('Helvetica-Bold').fontSize(14)
-        .text('RELATÓRIO DE DOCUMENTOS FISCAIS', L, y, { width: TW, align: 'center' })
-      y += 20
-
-      // Informações
-      doc.font('Helvetica').fontSize(8)
-      doc.text(`Empresa: ${company?.name || 'Todas as empresas'}`, L, y)
-      y += 11
-      if (company?.cnpj) {
-        doc.text(`CNPJ: ${fmtCNPJ(company.cnpj)}`, L, y); y += 11
-      }
-      doc.text(`Competência: ${competenciaLabel}`, L, y); y += 11
-      doc.text(`Gerado em: ${generatedAt}`, L, y); y += 11
-      doc.text('Software responsável: Fiscal Dashboard', L, y); y += 16
-
-      return y
+  // ── Notas faltantes: quebras de sequência por modelo+série (mesma lógica
+  // de checkSequenceBreaks, mas calculada aqui só para exibir no relatório) ──
+  const bySerie = new Map<string, { mod: number; serie: string; nums: number[] }>()
+  for (const n of nfes) {
+    if (n.status === 'CANCELADA') continue
+    const key = `${n.mod}-${n.serie}`
+    const entry = bySerie.get(key) ?? { mod: n.mod, serie: n.serie, nums: [] }
+    const num = parseInt(n.nNF, 10)
+    if (!isNaN(num)) entry.nums.push(num)
+    bySerie.set(key, entry)
+  }
+  const faltantesGrupos: { mod: number; serie: string; faltantes: number[] }[] = []
+  let totalFaltantes = 0
+  for (const { mod, serie, nums } of bySerie.values()) {
+    const sorted = [...nums].sort((a, b) => a - b)
+    const gaps: number[] = []
+    for (let i = 1; i < sorted.length; i++) {
+      for (let g = sorted[i - 1] + 1; g < sorted[i]; g++) gaps.push(g)
     }
-
-    function drawTableHeader(y: number): number {
-      let x = L
-      doc.font('Helvetica-Bold').fontSize(HDR_SZ)
-      // fundo do cabeçalho
-      doc.rect(L, y, TW, HDR_H).stroke()
-      cols.forEach(col => {
-        const pad = 2
-        doc.rect(x, y, col.w, HDR_H).stroke()
-        doc.text(col.label, x + pad, y + 3, { width: col.w - pad * 2, align: col.align, lineBreak: false })
-        x += col.w
-      })
-      return y + HDR_H
+    if (gaps.length > 0) {
+      faltantesGrupos.push({ mod, serie, faltantes: gaps })
+      totalFaltantes += gaps.length
     }
+  }
 
-    function drawRow(n: typeof nfes[0], y: number, shade: boolean): number {
-      let x = L
-      if (shade) doc.rect(L, y, TW, ROW_H).fillAndStroke('#f5f5f5', 'white').stroke()
-      doc.font('Helvetica').fontSize(FONT_SZ).fillColor('black')
-      const values = [
-        format(new Date(n.dhEmi), 'dd/MM/yyyy', { locale: ptBR }),
-        String(n.serie),
-        String(n.nNF),
-        n.status,
-        n.chNFe || '',
-        String(n.mod),
-        `R$ ${fmtCur(Number(n.vNF))}`,
-      ]
-      values.forEach((val, i) => {
-        const col = cols[i]
-        const pad = 2
-        // borda lateral
-        doc.rect(x, y, col.w, ROW_H).stroke()
-        // texto (chave de acesso em fonte menor)
-        const fs = i === 4 ? 5.5 : FONT_SZ
-        doc.font(i === 4 ? 'Courier' : 'Helvetica').fontSize(fs)
-        doc.text(val, x + pad, y + (ROW_H - fs) / 2, { width: col.w - pad * 2, align: col.align, lineBreak: false })
-        x += col.w
-      })
-      doc.font('Helvetica').fillColor('black')
-      return y + ROW_H
-    }
+  const vDescTotal = autorizadas.reduce((s, n) => s + Number(n.vDesc), 0)
+  const vICMSTotal = autorizadas.reduce((s, n) => s + Number(n.vICMS), 0)
+  const vProdTotal = autorizadas.reduce((s, n) => s + Number(n.vProd), 0)
 
-    function drawSection(
-      title: string,
-      list: typeof nfes,
-      total: number,
-      startY: number
-    ): number {
-      if (list.length === 0) return startY
+  const notesRows = autorizadas
+    .map(
+      (n) => `<tr>
+        <td class="mono">${n.nNF}</td>
+        <td class="tc">${n.serie}</td>
+        <td>${format(new Date(n.dhEmi), 'dd/MM/yyyy HH:mm')}</td>
+        <td class="tr">${fmtCur(Number(n.vProd))}</td>
+        <td class="tr fw">${fmtCur(Number(n.vNF))}</td>
+        <td class="mono chave">${formatChave(n.chNFe)}</td>
+        <td><span class="badge badge-green">Autorizada</span></td>
+      </tr>`
+    )
+    .join('')
 
-      let y = startY
-      // checar espaço para heading
-      if (y + 20 > pageBottom()) { doc.addPage(); y = drawHeader() }
+  const faltantesRows = faltantesGrupos
+    .map(
+      (g) => `<tr>
+        <td class="tc">${g.mod === 65 ? 'NFC-e' : 'NF-e'}</td>
+        <td class="tc">${g.serie}</td>
+        <td class="ranges">${compactRanges(g.faltantes)}</td>
+      </tr>`
+    )
+    .join('')
 
-      doc.font('Helvetica-Bold').fontSize(10).fillColor('black')
-      doc.text(title, L, y); y += 12
+  const html = `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">
+<style>
+  body{font-family:Arial,sans-serif;font-size:9px;color:#1f2937;margin:0}
+  h1{font-size:20px;margin:0 0 2px}
+  .subheader{color:#374151;font-size:9px;margin-bottom:2px}
+  .subheader b{color:#111827}
+  .cards{display:flex;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;margin:12px 0}
+  .card{flex:1;text-align:center;padding:8px 4px;border-right:1px solid #e5e7eb}
+  .card:last-child{border-right:none}
+  .card .lbl{font-size:6.5px;text-transform:uppercase;color:#6b7280;letter-spacing:.03em}
+  .card .val{font-size:13px;font-weight:bold;margin-top:3px;color:#111827}
+  .card.saidas .val{color:#065f46}
+  .card.cancel .val{color:#991b1b}
+  .card.falt .val{color:#92400e}
+  .card .val.periodo{font-size:9px;font-weight:normal;color:#374151}
+  h2{font-size:11px;margin:14px 0 6px;display:flex;align-items:center;gap:6px}
+  h2 .count{background:#eef2ff;color:#3730a3;border-radius:9999px;padding:1px 8px;font-size:8px;font-weight:normal;margin-left:auto}
+  table{width:100%;border-collapse:collapse}
+  thead{display:table-header-group}
+  th{background:#374151;color:#fff;padding:4px 6px;text-align:left;font-size:8px;white-space:nowrap}
+  td{padding:3px 6px;border-bottom:1px solid #f3f4f6}
+  tr:nth-child(even){background:#f9fafb}
+  .tr{text-align:right}
+  .tc{text-align:center}
+  .fw{font-weight:bold}
+  .mono{font-family:Courier,monospace}
+  .chave{font-size:7px;letter-spacing:.02em}
+  .ranges{font-family:Courier,monospace;font-size:7.5px}
+  .badge{padding:2px 7px;border-radius:9999px;font-size:7.5px;font-weight:bold}
+  .badge-green{background:#d1fae5;color:#065f46}
+  tfoot tr,.total-row{background:#dbeafe!important;font-weight:bold}
+  .falt-title{color:#92400e}
+  .consolidado td{border-bottom:1px solid #e5e7eb}
+  .consolidado .total{background:#dbeafe;font-weight:bold}
+</style></head><body>
 
-      // cabeçalho da tabela
-      if (y + HDR_H > pageBottom()) { doc.addPage(); y = drawHeader() }
-      y = drawTableHeader(y)
+<h1>RELATÓRIO DE DOCUMENTOS FISCAIS</h1>
+<div class="subheader"><b>Empresa:</b> ${company?.name || 'Todas as empresas'}${company?.cnpj ? ` &nbsp;•&nbsp; <b>CNPJ:</b> ${fmtCNPJ(company.cnpj)}` : ''}</div>
+<div class="subheader"><b>Competência:</b> ${competenciaLabel} &nbsp;•&nbsp; <b>Gerado em:</b> ${generatedAt} &nbsp;•&nbsp; Software responsável: Fiscal Dashboard</div>
 
-      // linhas de dados
-      list.forEach((n, idx) => {
-        if (y + ROW_H > pageBottom()) {
-          doc.addPage()
-          y = drawHeader()
-          y = drawTableHeader(y)
-        }
-        y = drawRow(n, y, idx % 2 === 1)
-      })
+<div class="cards">
+  <div class="card saidas"><div class="lbl">Saídas Autorizadas</div><div class="val">${saidas.length}</div></div>
+  <div class="card saidas"><div class="lbl">Entradas Autorizadas</div><div class="val">${entradas.length}</div></div>
+  <div class="card cancel"><div class="lbl">Canceladas</div><div class="val">${canceladas.length}</div></div>
+  <div class="card falt"><div class="lbl">Faltantes</div><div class="val">${totalFaltantes}</div></div>
+  <div class="card"><div class="lbl">Vl. Saídas</div><div class="val">${fmtCur(totalSaidas)}</div></div>
+  <div class="card"><div class="lbl">Vl. Entradas</div><div class="val">${fmtCur(totalEntradas)}</div></div>
+  <div class="card"><div class="lbl">Período</div><div class="val periodo">${competenciaLabel}</div></div>
+</div>
 
-      // linha de total
-      if (y + ROW_H + 2 > pageBottom()) { doc.addPage(); y = drawHeader() }
-      y += 2
-      doc.rect(L, y, TW, ROW_H).stroke()
-      doc.font('Helvetica-Bold').fontSize(FONT_SZ).fillColor('black')
-      const totalLabel = `TOTAL ${title}`
-      const colBeforeVal = TW - cols[cols.length - 1].w
-      doc.text(totalLabel, L + 2, y + (ROW_H - FONT_SZ) / 2, { width: colBeforeVal - 4, align: 'right', lineBreak: false })
-      doc.rect(L + colBeforeVal, y, cols[cols.length - 1].w, ROW_H).stroke()
-      doc.text(`R$ ${fmtCur(total)}`, L + colBeforeVal + 2, y + (ROW_H - FONT_SZ) / 2, {
-        width: cols[cols.length - 1].w - 4, align: 'right', lineBreak: false,
-      })
-      return y + ROW_H + 8
-    }
+<h2>Notas Autorizadas <span class="count">${autorizadas.length} notas</span></h2>
+<table>
+  <thead>
+    <tr><th>Nº NF</th><th>Série</th><th>Emissão</th><th class="tr">Vl. Prod.</th><th class="tr">Vl. Total</th><th>Chave de Acesso</th><th>Status</th></tr>
+  </thead>
+  <tbody>
+    ${notesRows}
+    <tr class="total-row">
+      <td colspan="3"><strong>TOTAIS — ${autorizadas.length} notas</strong></td>
+      <td class="tr">${fmtCur(vProdTotal)}</td>
+      <td class="tr">${fmtCur(totalGeral)}</td>
+      <td colspan="2"></td>
+    </tr>
+  </tbody>
+</table>
 
-    // ── Renderizar ──────────────────────────────────────────────────────────
-    let y = drawHeader()
+${faltantesGrupos.length > 0 ? `
+<h2 class="falt-title">⚠ Notas Faltantes <span class="count">${totalFaltantes} notas</span></h2>
+<table>
+  <thead><tr><th>Mod.</th><th>Série</th><th>Números das Notas Faltantes</th></tr></thead>
+  <tbody>${faltantesRows}</tbody>
+</table>` : ''}
 
-    y = drawSection('SAÍDAS', saidas, totalSaidas, y)
-    y = drawSection('ENTRADAS', entradas, totalEntradas, y)
-    y = drawSection('CANCELADAS', canceladas, canceladas.reduce((s, n) => s + Number(n.vNF), 0), y)
+<h2>Consolidado Geral</h2>
+<table class="consolidado">
+  <thead><tr><th>Descrição</th><th class="tr">Qtd.</th><th class="tr">Vl. Produtos</th><th class="tr">Vl. Desc.</th><th class="tr">Vl. ICMS</th><th class="tr">Vl. Total</th></tr></thead>
+  <tbody>
+    <tr><td>Notas de Saída (Autorizadas)</td><td class="tr">${saidas.length}</td><td class="tr">${fmtCur(saidas.reduce((s, n) => s + Number(n.vProd), 0))}</td><td class="tr">${fmtCur(saidas.reduce((s, n) => s + Number(n.vDesc), 0))}</td><td class="tr">${fmtCur(saidas.reduce((s, n) => s + Number(n.vICMS), 0))}</td><td class="tr fw">${fmtCur(totalSaidas)}</td></tr>
+    <tr><td>Notas de Entrada (Autorizadas)</td><td class="tr">${entradas.length}</td><td class="tr">${fmtCur(entradas.reduce((s, n) => s + Number(n.vProd), 0))}</td><td class="tr">${fmtCur(entradas.reduce((s, n) => s + Number(n.vDesc), 0))}</td><td class="tr">${fmtCur(entradas.reduce((s, n) => s + Number(n.vICMS), 0))}</td><td class="tr fw">${fmtCur(totalEntradas)}</td></tr>
+    <tr><td>Notas Canceladas</td><td class="tr">${canceladas.length}</td><td class="tr">${fmtCur(canceladas.reduce((s, n) => s + Number(n.vProd), 0))}</td><td class="tr">–</td><td class="tr">–</td><td class="tr">${fmtCur(canceladas.reduce((s, n) => s + Number(n.vNF), 0))}</td></tr>
+    <tr><td>Notas Faltantes</td><td class="tr">${totalFaltantes}</td><td class="tr">–</td><td class="tr">–</td><td class="tr">–</td><td class="tr">–</td></tr>
+    <tr class="total"><td><strong>TOTAL GERAL</strong></td><td class="tr fw">${autorizadas.length}</td><td class="tr fw">${fmtCur(vProdTotal)}</td><td class="tr fw">${fmtCur(vDescTotal)}</td><td class="tr fw">${fmtCur(vICMSTotal)}</td><td class="tr fw">${fmtCur(totalGeral)}</td></tr>
+  </tbody>
+</table>
 
-    // TOTAL GERAL
-    if (y + ROW_H + 4 > pageBottom()) { doc.addPage(); y = drawHeader() }
-    y += 4
-    doc.font('Helvetica-Bold').fontSize(9).fillColor('black')
-    doc.text('TOTAL GERAL', L, y, { width: TW - cols[cols.length - 1].w - 4, align: 'right', lineBreak: false })
-    doc.rect(L + TW - cols[cols.length - 1].w, y - 1, cols[cols.length - 1].w, ROW_H + 2).stroke()
-    doc.text(`R$ ${fmtCur(totalGeral)}`, L + TW - cols[cols.length - 1].w + 2, y + 1, {
-      width: cols[cols.length - 1].w - 4, align: 'right', lineBreak: false,
-    })
+</body></html>`
 
-    doc.end()
+  const puppeteer = (await import('puppeteer')).default
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
   })
+  try {
+    const page = await browser.newPage()
+    await page.setContent(html, { waitUntil: 'networkidle0' })
+    const headerLabel = `Relatório de Documentos Fiscais — ${competenciaLabel}`
+    const pdf = await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      margin: { top: '16mm', right: '10mm', bottom: '14mm', left: '10mm' },
+      displayHeaderFooter: true,
+      headerTemplate: `<div style="font-size:7px;color:#6b7280;width:100%;padding:0 10mm;display:flex;justify-content:space-between"><span>${headerLabel}</span><span>${generatedAt}</span></div>`,
+      footerTemplate: `<div style="font-size:7px;color:#6b7280;width:100%;padding:0 10mm;text-align:center">Página <span class="pageNumber"></span> de <span class="totalPages"></span></div>`,
+    })
+    return Buffer.from(pdf)
+  } finally {
+    await browser.close()
+  }
+}
+
+function formatChave(ch: string | null | undefined): string {
+  if (!ch) return ''
+  return ch.replace(/(\d{4})(?=\d)/g, '$1 ')
 }
 
 // ─── PIS/COFINS por Itens (Monofásico / ST) ───────────────────────────────────
