@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify'
 import prisma from '../../lib/prisma.js'
+import { analisarFiscalNfe } from '../../services/tax/nfeFiscalAnalysis.js'
 
 const nfeRoutes: FastifyPluginAsync = async (fastify) => {
   // GET /nfe - list with filters
@@ -81,6 +82,26 @@ const nfeRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     return reply.send({ nfe })
+  })
+
+  // GET /nfe/:id/fiscal-analysis - CFOP detalhado, campos fiscais e leitura da Reforma Tributária
+  fastify.get('/:id/fiscal-analysis', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string }
+
+    const nfe = await prisma.nfe.findUnique({
+      where: { id },
+      include: {
+        company: { select: { regime: true } },
+        items: { orderBy: { nItem: 'asc' } },
+      },
+    })
+
+    if (!nfe) {
+      return reply.status(404).send({ error: 'NF-e not found' })
+    }
+
+    const analysis = analisarFiscalNfe(nfe)
+    return reply.send(analysis)
   })
 
   // DELETE /nfe/:id

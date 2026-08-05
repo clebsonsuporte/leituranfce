@@ -42,6 +42,17 @@ export function useNfe(id: string | undefined) {
   })
 }
 
+export function useNfeFiscalAnalysis(id: string | undefined) {
+  return useQuery({
+    queryKey: ['nfe-fiscal-analysis', id],
+    queryFn: async () => {
+      const { data } = await api.get(`/nfe/${id}/fiscal-analysis`)
+      return data
+    },
+    enabled: !!id,
+  })
+}
+
 export function useDeleteNfe() {
   const queryClient = useQueryClient()
   return useMutation({

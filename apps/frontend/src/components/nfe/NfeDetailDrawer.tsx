@@ -3,7 +3,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useNfe } from '@/hooks/useNfes'
+import { useNfe, useNfeFiscalAnalysis } from '@/hooks/useNfes'
 import {
   formatCurrency,
   formatCNPJ,
@@ -20,6 +20,7 @@ interface NfeDetailDrawerProps {
 
 export default function NfeDetailDrawer({ nfeId, onClose }: NfeDetailDrawerProps) {
   const { data: nfe, isLoading } = useNfe(nfeId || undefined)
+  const { data: fiscal, isLoading: isFiscalLoading } = useNfeFiscalAnalysis(nfeId || undefined)
 
   if (!nfeId) return null
 
@@ -62,13 +63,21 @@ export default function NfeDetailDrawer({ nfeId, onClose }: NfeDetailDrawerProps
             <Tabs defaultValue="geral" className="flex flex-col h-full">
               <div className="px-6 pt-4 border-b border-gray-100">
                 <TabsList className="bg-transparent p-0 h-auto gap-1">
-                  {['geral', 'itens', 'impostos', 'eventos'].map((tab) => (
+                  {['geral', 'itens', 'impostos', 'fiscal', 'eventos'].map((tab) => (
                     <TabsTrigger
                       key={tab}
                       value={tab}
                       className="data-[state=active]:bg-primary-50 data-[state=active]:text-primary-800 rounded-md px-3 py-1.5 text-sm capitalize"
                     >
-                      {tab === 'geral' ? 'Geral' : tab === 'itens' ? `Itens (${nfe.items?.length || 0})` : tab === 'impostos' ? 'Impostos' : `Eventos (${nfe.events?.length || 0})`}
+                      {tab === 'geral'
+                        ? 'Geral'
+                        : tab === 'itens'
+                          ? `Itens (${nfe.items?.length || 0})`
+                          : tab === 'impostos'
+                            ? 'Impostos'
+                            : tab === 'fiscal'
+                              ? 'CFOP e Reforma'
+                              : `Eventos (${nfe.events?.length || 0})`}
                     </TabsTrigger>
                   ))}
                 </TabsList>
@@ -183,6 +192,190 @@ export default function NfeDetailDrawer({ nfeId, onClose }: NfeDetailDrawerProps
                     </div>
                   ))}
                 </div>
+              </TabsContent>
+
+              <TabsContent value="fiscal" className="p-6 m-0 space-y-6">
+                {isFiscalLoading ? (
+                  <div className="space-y-3">
+                    <Skeleton className="h-24 w-full" />
+                    <Skeleton className="h-48 w-full" />
+                  </div>
+                ) : !fiscal ? (
+                  <div className="text-center text-gray-400 py-8">Análise fiscal indisponível</div>
+                ) : (
+                  <>
+                    {/* Conformidade do XML com a Reforma (NT 2025.002-RTC) */}
+                    <div className={`rounded-lg border p-4 ${fiscal.xmlReforma.adequado ? 'border-green-200 bg-green-50' : 'border-amber-200 bg-amber-50'}`}>
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-sm font-semibold text-gray-900">XML adequado à Reforma Tributária?</p>
+                        <span
+                          className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${
+                            fiscal.xmlReforma.adequado ? 'bg-green-600 text-white' : 'bg-amber-500 text-white'
+                          }`}
+                        >
+                          {fiscal.xmlReforma.adequado ? '✓ Novo padrão (NT 2025.002)' : '✗ Padrão pré-reforma'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-600 mb-3">
+                        {fiscal.xmlReforma.adequado
+                          ? 'O XML desta nota já contém os grupos IBSCBS, IBSCBSTot e cClassTrib — o sistema emissor foi atualizado conforme a NT 2025.002-RTC.'
+                          : 'O XML desta nota ainda não contém os grupos IBSCBS/IBSCBSTot/cClassTrib da Reforma Tributária. O ERP/PDV do emitente ainda não foi atualizado para a NT 2025.002-RTC.'}
+                      </p>
+                      <div className="overflow-x-auto rounded-lg border border-white/60">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Item</TableHead>
+                              <TableHead>Situação</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {fiscal.parecerTecnico.map((p: { item: string; conforme: boolean; situacao: string }) => (
+                              <TableRow key={p.item}>
+                                <TableCell className="text-xs font-medium text-gray-700">{p.item}</TableCell>
+                                <TableCell className="text-xs">
+                                  <span className={p.conforme ? 'text-green-700' : 'text-amber-700'}>
+                                    {p.conforme ? '✅' : '⚠️'} {p.situacao}
+                                  </span>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </div>
+
+                    {/* Reforma Tributária */}
+                    <div className="rounded-lg border border-gray-200 p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-sm font-semibold text-gray-900">Reforma Tributária — LC 214/2025</p>
+                        <span
+                          className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${
+                            fiscal.reforma.adequada ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+                          }`}
+                        >
+                          {fiscal.reforma.adequada ? 'Classificação (NCM/CST) adequada' : 'Pontos a revisar na classificação'}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3 mb-3">
+                        <div className="bg-blue-50 rounded-lg p-3">
+                          <p className="text-xs text-blue-600 font-semibold">CBS (substitui PIS/COFINS)</p>
+                          <p className="text-lg font-bold text-blue-700">{fiscal.transicaoAtual.cbs}%</p>
+                        </div>
+                        <div className="bg-indigo-50 rounded-lg p-3">
+                          <p className="text-xs text-indigo-600 font-semibold">IBS (substitui ICMS/ISS)</p>
+                          <p className="text-lg font-bold text-indigo-700">{fiscal.transicaoAtual.ibs}%</p>
+                        </div>
+                      </div>
+                      <ul className="space-y-1.5">
+                        {fiscal.reforma.alertas.map((alerta: string, i: number) => (
+                          <li key={i} className="text-xs text-gray-600 flex gap-2">
+                            <span className="text-gray-400">•</span>
+                            <span>{alerta}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+
+                    {/* Resumo de CFOP */}
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900 mb-2">CFOP utilizados nesta nota</p>
+                      <div className="overflow-x-auto rounded-lg border border-gray-200">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>CFOP</TableHead>
+                              <TableHead>Descrição</TableHead>
+                              <TableHead className="text-right">Itens</TableHead>
+                              <TableHead className="text-right">Valor</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {fiscal.cfopResumo.map((c: { cfop: string; descricao: string; grupo: string; count: number; valorTotal: number }) => (
+                              <TableRow key={c.cfop}>
+                                <TableCell className="text-xs font-mono font-medium">{c.cfop}</TableCell>
+                                <TableCell className="text-xs text-gray-700">
+                                  {c.descricao}
+                                  <p className="text-[10px] text-gray-400 mt-0.5">{c.grupo}</p>
+                                </TableCell>
+                                <TableCell className="text-right text-xs">{c.count}</TableCell>
+                                <TableCell className="text-right text-xs font-medium">{formatCurrency(c.valorTotal)}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </div>
+
+                    {/* Detalhamento fiscal por item */}
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900 mb-2">Detalhamento fiscal por item</p>
+                      <div className="space-y-3">
+                        {fiscal.items.map((item: {
+                          nItem: number
+                          xProd: string
+                          ncm: string | null
+                          cfop: string
+                          cfopDescricao: string
+                          icms: { cst: string | null; cstDescricao: string | null; csosn: string | null; csosnDescricao: string | null; tributacao: string | null; vBC: number; aliquota: number; valor: number; vST: number }
+                          pis: { cst: string | null; cstDescricao: string | null; valor: number }
+                          cofins: { cst: string | null; cstDescricao: string | null; valor: number }
+                          ipi: { valor: number }
+                          reforma: {
+                            impostoSeletivo: { aplicavel: boolean; aliquota?: number; descricao?: string; base?: string }
+                            reducao: { aplicavel: boolean; percentual?: number; descricao?: string; base?: string }
+                          }
+                        }) => (
+                          <div key={item.nItem} className="rounded-lg border border-gray-200 p-3">
+                            <div className="flex items-start justify-between gap-2 mb-2">
+                              <div>
+                                <p className="text-sm font-medium text-gray-900">{item.nItem} — {item.xProd}</p>
+                                <p className="text-xs text-gray-400">NCM {item.ncm || '-'} · CFOP {item.cfop} — {item.cfopDescricao}</p>
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-3 gap-2 text-xs">
+                              <div className="bg-gray-50 rounded p-2">
+                                <p className="text-gray-400">ICMS</p>
+                                <p className="font-medium text-gray-800">
+                                  {item.icms.cst ? `CST ${item.icms.cst}` : item.icms.csosn ? `CSOSN ${item.icms.csosn}` : 'sem CST/CSOSN'}
+                                </p>
+                                <p className="text-gray-500">{item.icms.cstDescricao || item.icms.csosnDescricao || '—'}</p>
+                                <p className="text-gray-500 mt-1">Alíq. {item.icms.aliquota.toFixed(2)}% · {formatCurrency(item.icms.valor)}</p>
+                                {item.icms.vST > 0 && <p className="text-gray-500">ST: {formatCurrency(item.icms.vST)}</p>}
+                              </div>
+                              <div className="bg-gray-50 rounded p-2">
+                                <p className="text-gray-400">PIS</p>
+                                <p className="font-medium text-gray-800">{item.pis.cst ? `CST ${item.pis.cst}` : '—'}</p>
+                                <p className="text-gray-500">{item.pis.cstDescricao || '—'}</p>
+                                <p className="text-gray-500 mt-1">{formatCurrency(item.pis.valor)}</p>
+                              </div>
+                              <div className="bg-gray-50 rounded p-2">
+                                <p className="text-gray-400">COFINS</p>
+                                <p className="font-medium text-gray-800">{item.cofins.cst ? `CST ${item.cofins.cst}` : '—'}</p>
+                                <p className="text-gray-500">{item.cofins.cstDescricao || '—'}</p>
+                                <p className="text-gray-500 mt-1">{formatCurrency(item.cofins.valor)}</p>
+                              </div>
+                            </div>
+                            {(item.reforma.impostoSeletivo.aplicavel || item.reforma.reducao.aplicavel) && (
+                              <div className="mt-2 space-y-1">
+                                {item.reforma.impostoSeletivo.aplicavel && (
+                                  <p className="text-xs text-red-600">
+                                    ⚠️ Imposto Seletivo ({item.reforma.impostoSeletivo.aliquota}%) — {item.reforma.impostoSeletivo.descricao} ({item.reforma.impostoSeletivo.base})
+                                  </p>
+                                )}
+                                {item.reforma.reducao.aplicavel && (
+                                  <p className="text-xs text-green-600">
+                                    ✓ Possível redução de {item.reforma.reducao.percentual}% — {item.reforma.reducao.descricao} ({item.reforma.reducao.base})
+                                  </p>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )}
               </TabsContent>
 
               <TabsContent value="eventos" className="p-6 m-0">
