@@ -71,6 +71,30 @@ async function applyPendingEvents(nfeId: string, chNFe: string): Promise<void> {
   await prisma.pendingNfeEvent.deleteMany({ where: { chNFe } })
 }
 
+// Achado real (import LOJAO GAIBU, 355 arquivos, 7 erros): quando uma
+// empresa nova é importada pela primeira vez, os primeiros arquivos do lote
+// processam em paralelo (IMPORT_CONCURRENCY) e todos batem no cache vazio
+// ao mesmo tempo — todos tentam `company.upsert()` pro mesmo CNPJ, só um
+// vence, os demais recebem violação de unique constraint (P2002) e a nota
+// inteira era descartada (nem chegava a criar o Nfe). Esse fallback busca a
+// empresa que a corrida já criou em vez de deixar a nota cair fora.
+async function resolveOrCreateCompany(cnpj: string, name: string): Promise<string> {
+  try {
+    const company = await prisma.company.upsert({
+      where: { cnpj },
+      create: { cnpj, name, fantasia: name, active: true },
+      update: {},
+    })
+    return company.id
+  } catch (err) {
+    const isUniqueViolation = (err as { code?: string })?.code === 'P2002'
+    if (!isUniqueViolation) throw err
+    const existing = await prisma.company.findUnique({ where: { cnpj } })
+    if (existing) return existing.id
+    throw err
+  }
+}
+
 export async function processXmlFiles(
   files: ImportFile[],
   companyId: string,
@@ -145,17 +169,7 @@ export async function processXmlFiles(
         if (cached) {
           resolvedCompanyId = cached
         } else {
-          const emitCompany = await prisma.company.upsert({
-            where: { cnpj: nfe.emitCnpj },
-            create: {
-              cnpj: nfe.emitCnpj,
-              name: nfe.emitNome,
-              fantasia: nfe.emitNome,
-              active: true,
-            },
-            update: {},
-          })
-          resolvedCompanyId = emitCompany.id
+          resolvedCompanyId = await resolveOrCreateCompany(nfe.emitCnpj, nfe.emitNome)
           companyCache.set(nfe.emitCnpj, resolvedCompanyId)
           // Backfill importLog companyId on first resolution
           await prisma.importLog.updateMany({
