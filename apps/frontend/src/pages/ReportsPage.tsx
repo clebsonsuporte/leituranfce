@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import {
   FileText, Download, Loader2, Table2, BarChart3, FileSpreadsheet, File,
-  ArrowDownUp, ShoppingBag, Tag, Package,
+  ArrowDownUp, ShoppingBag, Tag, Package, FileArchive,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
@@ -69,6 +69,21 @@ const REPORT_GROUPS = [
     ],
   },
   {
+    label: 'Arquivos Fonte',
+    types: [
+      {
+        value: 'xml-zip',
+        label: 'Exportar XMLs (.zip)',
+        icon: FileArchive,
+        color: 'text-emerald-700',
+        bg: 'bg-emerald-50 border-emerald-200',
+        activeBg: 'border-emerald-600 bg-emerald-50',
+        desc: 'XMLs originais das notas autorizadas do período, exatamente como importados do Drive — sem cancelada/inutilizada/sem protocolo',
+        formats: ['zip'],
+      },
+    ],
+  },
+  {
     label: 'Relatórios Gerenciais',
     types: [
       {
@@ -97,8 +112,8 @@ const REPORT_GROUPS = [
 
 const ALL_TYPES = REPORT_GROUPS.flatMap(g => g.types)
 
-const FORMAT_LABELS: Record<string, string> = { pdf: 'PDF', excel: 'Excel (.xlsx)', csv: 'CSV' }
-const FORMAT_ICONS: Record<string, React.ElementType> = { pdf: File, excel: FileSpreadsheet, csv: Table2 }
+const FORMAT_LABELS: Record<string, string> = { pdf: 'PDF', excel: 'Excel (.xlsx)', csv: 'CSV', zip: 'ZIP' }
+const FORMAT_ICONS: Record<string, React.ElementType> = { pdf: File, excel: FileSpreadsheet, csv: Table2, zip: FileArchive }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 

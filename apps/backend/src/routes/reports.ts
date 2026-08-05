@@ -6,6 +6,7 @@ import {
   generateEntradasSaidasReport,
   generatePisCofinsItemsReport,
 } from '../services/reports/itemsReportService.js'
+import { exportXmlZip } from '../services/reports/xmlExportService.js'
 
 // In-memory store for generated reports (in production use Redis or S3)
 const reportStore = new Map<
@@ -51,7 +52,12 @@ const reportsRoutes: FastifyPluginAsync = async (fastify) => {
     const isItemsReport = itemsReportTypes.includes(type)
 
     try {
-      if (isItemsReport) {
+      if (type === 'xml-zip') {
+        const result = await exportXmlZip(filters)
+        buffer = result.buffer
+        contentType = 'application/zip'
+        filename = `xmls-${timestamp}.zip`
+      } else if (isItemsReport) {
         // Items-level reports — PDF or CSV only
         const cfopMap: Record<string, string[]> = {
           'monofasico-5102': ['5102'],
