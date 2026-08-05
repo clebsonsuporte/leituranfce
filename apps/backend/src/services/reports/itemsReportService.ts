@@ -144,6 +144,15 @@ function notaRow(n: (typeof autorizadas)[number]): string {
       </tr>`
   }
 
+  function canceladaRow(n: (typeof canceladas)[number]): string {
+    return `<tr>
+        <td class="mono">${n.nNF}</td>
+        <td class="tc">${n.serie}</td>
+        <td class="mono chave">${formatChave(n.chNFe)}</td>
+        <td><span class="badge badge-red">Cancelada</span></td>
+      </tr>`
+  }
+
   // Uma tabela + total por modelo (NF-e / NFC-e), em vez de uma lista única.
   const notasPorModeloHtml = autorizadasPorModelo
     .map(({ label, list }) => {
@@ -166,6 +175,24 @@ function notaRow(n: (typeof autorizadas)[number]): string {
   </tbody>
 </table>`
     })
+    .join('')
+
+  // Notas canceladas: só número, série e chave — não entram no total de
+  // faturamento, só servem pra conferência (igual ao card "Canceladas" do
+  // resumo, mas com o detalhe de cada uma).
+  const canceladasPorModeloHtml = canceladasPorModelo
+    .map(
+      ({ label, list }) => `
+<h2>Notas Canceladas — ${label} <span class="count">${list.length} notas</span></h2>
+<table>
+  <thead>
+    <tr><th>Nº NF</th><th>Série</th><th>Chave de Acesso</th><th>Status</th></tr>
+  </thead>
+  <tbody>
+    ${list.map(canceladaRow).join('')}
+  </tbody>
+</table>`
+    )
     .join('')
 
   const faltantesRows = faltantesGrupos
@@ -208,6 +235,7 @@ function notaRow(n: (typeof autorizadas)[number]): string {
   .ranges{font-family:Courier,monospace;font-size:7.5px}
   .badge{padding:2px 7px;border-radius:9999px;font-size:7.5px;font-weight:bold}
   .badge-green{background:#d1fae5;color:#065f46}
+  .badge-red{background:#fee2e2;color:#991b1b}
   tfoot tr,.total-row{background:#dbeafe!important;font-weight:bold}
   .falt-title{color:#92400e}
   .consolidado td{border-bottom:1px solid #e5e7eb}
@@ -229,6 +257,8 @@ function notaRow(n: (typeof autorizadas)[number]): string {
 </div>
 
 ${notasPorModeloHtml}
+
+${canceladas.length > 0 ? canceladasPorModeloHtml : ''}
 
 ${faltantesGrupos.length > 0 ? `
 <h2 class="falt-title">⚠ Notas Faltantes <span class="count">${totalFaltantes} notas</span></h2>
