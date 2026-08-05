@@ -259,7 +259,10 @@ const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get('/missing-notes', { preHandler: [fastify.authenticate] }, async (request, reply) => {
     const query = request.query as { companyId?: string; competencia?: string }
 
-    const where: Record<string, unknown> = { status: { notIn: ['CANCELADA', 'SEM_PROTOCOLO'] } }
+    // Cancelada/Denegada/Inutilizada não são "lacuna" — o número foi usado e
+    // tem um registro explicando o que aconteceu com ele. Só SEM_PROTOCOLO
+    // (sem confirmação nenhuma da SEFAZ) conta como número sem explicação.
+    const where: Record<string, unknown> = { status: { not: 'SEM_PROTOCOLO' } }
     if (query.companyId) where.companyId = query.companyId
     if (query.competencia) where.competencia = query.competencia
 

@@ -106,7 +106,8 @@ export async function generateEntradasSaidasReport(filters: ReportFilters): Prom
   // de checkSequenceBreaks, mas calculada aqui só para exibir no relatório) ──
   const bySerie = new Map<string, { mod: number; serie: string; nums: number[] }>()
   for (const n of nfes) {
-    if (n.status === 'CANCELADA' || n.status === 'SEM_PROTOCOLO') continue
+    // Cancelada/Denegada/Inutilizada não são "lacuna" — só SEM_PROTOCOLO conta.
+    if (n.status === 'SEM_PROTOCOLO') continue
     const key = `${n.mod}-${n.serie}`
     const entry = bySerie.get(key) ?? { mod: n.mod, serie: n.serie, nums: [] }
     const num = parseInt(n.nNF, 10)

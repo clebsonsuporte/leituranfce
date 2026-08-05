@@ -2,11 +2,14 @@ import prisma from '../../lib/prisma.js'
 import { PRODUTOS_COM_ST } from '../tax/taxData.js'
 
 export async function checkSequenceBreaks(companyId: string, competencia: string): Promise<void> {
+  // Cancelada/Denegada/Inutilizada não são "lacuna" — o número foi usado e
+  // tem um registro explicando o que aconteceu com ele. Só SEM_PROTOCOLO
+  // (sem confirmação nenhuma da SEFAZ) conta como número sem explicação.
   const nfes = await prisma.nfe.findMany({
     where: {
       companyId,
       competencia,
-      status: { notIn: ['CANCELADA', 'SEM_PROTOCOLO'] },
+      status: { not: 'SEM_PROTOCOLO' },
     },
     select: { nNF: true, serie: true, mod: true },
     orderBy: { nNF: 'asc' },
