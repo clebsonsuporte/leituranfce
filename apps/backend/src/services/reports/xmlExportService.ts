@@ -6,15 +6,17 @@ interface XmlExportFilters {
   competencia?: string
 }
 
-// Exporta em um único ZIP os XMLs originais das notas validadas do período —
-// mesmo critério de "Notas Autorizadas" usado no relatório de Entradas e
-// Saídas (exclui cancelada/inutilizada/sem protocolo). O xmlRaw salvo no
-// banco é o mesmo conteúdo importado do Drive, sem segunda cópia/edição —
-// então o ZIP exportado aqui é idêntico ao que está na pasta do cliente no
-// Drive, só que já filtrado e empacotado para conferência/envio.
+// Exporta em um único ZIP os XMLs originais do período — cópia fiel do que
+// aparece no relatório de Entradas e Saídas: autorizadas, canceladas e
+// inutilizadas entram juntas (cada uma é um registro real, só com situações
+// diferentes). Só SEM_PROTOCOLO fica de fora, porque não tem nenhuma
+// confirmação da SEFAZ de que a nota existe de fato. O xmlRaw salvo no banco
+// é o mesmo conteúdo importado do Drive, sem segunda cópia/edição — então o
+// ZIP exportado aqui é idêntico ao que está na pasta do cliente no Drive, só
+// que já filtrado e empacotado para conferência/envio.
 export async function exportXmlZip(filters: XmlExportFilters): Promise<{ buffer: Buffer; count: number }> {
   const where: Record<string, unknown> = {
-    status: { notIn: ['CANCELADA', 'INUTILIZADA', 'SEM_PROTOCOLO'] },
+    status: { not: 'SEM_PROTOCOLO' },
   }
   if (filters.companyId) where.companyId = filters.companyId
   if (filters.competencia) where.competencia = filters.competencia

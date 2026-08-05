@@ -78,7 +78,7 @@ const REPORT_GROUPS = [
         color: 'text-emerald-700',
         bg: 'bg-emerald-50 border-emerald-200',
         activeBg: 'border-emerald-600 bg-emerald-50',
-        desc: 'XMLs originais das notas autorizadas do período, exatamente como importados do Drive — sem cancelada/inutilizada/sem protocolo',
+        desc: 'Cópia fiel do relatório: XMLs originais do período exatamente como importados do Drive — autorizadas, canceladas e inutilizadas juntas, só sem protocolo fica de fora',
         formats: ['zip'],
       },
     ],
