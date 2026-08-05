@@ -74,6 +74,34 @@ export async function generateEntradasSaidasReport(filters: ReportFilters): Prom
   const totalEntradas = entradas.reduce((s, n) => s + Number(n.vNF), 0)
   const totalGeral = totalSaidas + totalEntradas
 
+  const modelLabel = (mod: number) => (mod === 55 ? 'NF-e' : mod === 65 ? 'NFC-e' : `Modelo ${mod}`)
+  // Agrupa uma lista de notas por modelo (55=NF-e, 65=NFC-e), na ordem em que
+  // os modelos aparecem nos dados — cada grupo tem sua própria tabela/total.
+  function porModelo(list: typeof nfes): { mod: number; label: string; list: typeof nfes }[] {
+    const map = new Map<number, typeof nfes>()
+    for (const n of list) {
+      const arr = map.get(n.mod) ?? []
+      arr.push(n)
+      map.set(n.mod, arr)
+    }
+    return [...map.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([mod, l]) => ({ mod, label: modelLabel(mod), list: l }))
+  }
+  const autorizadasPorModelo = porModelo(autorizadas)
+  const canceladasPorModelo = porModelo(canceladas)
+  const saidasPorModelo = porModelo(saidas)
+  const entradasPorModelo = porModelo(entradas)
+
+  function consolidadoRow(label: string, list: typeof nfes, opts: { totalOverride?: number } = {}): string {
+    const qtd = list.length
+    const vProd = list.reduce((s, n) => s + Number(n.vProd), 0)
+    const vDesc = list.reduce((s, n) => s + Number(n.vDesc), 0)
+    const vICMS = list.reduce((s, n) => s + Number(n.vICMS), 0)
+    const total = opts.totalOverride ?? list.reduce((s, n) => s + Number(n.vNF), 0)
+    return `<tr><td>${label}</td><td class="tr">${qtd}</td><td class="tr">${fmtCur(vProd)}</td><td class="tr">${fmtCur(vDesc)}</td><td class="tr">${fmtCur(vICMS)}</td><td class="tr fw">${fmtCur(total)}</td></tr>`
+  }
+
   // ── Notas faltantes: quebras de sequência por modelo+série (mesma lógica
   // de checkSequenceBreaks, mas calculada aqui só para exibir no relatório) ──
   const bySerie = new Map<string, { mod: number; serie: string; nums: number[] }>()
@@ -103,9 +131,8 @@ export async function generateEntradasSaidasReport(filters: ReportFilters): Prom
   const vICMSTotal = autorizadas.reduce((s, n) => s + Number(n.vICMS), 0)
   const vProdTotal = autorizadas.reduce((s, n) => s + Number(n.vProd), 0)
 
-  const notesRows = autorizadas
-    .map(
-      (n) => `<tr>
+function notaRow(n: (typeof autorizadas)[number]): string {
+    return `<tr>
         <td class="mono">${n.nNF}</td>
         <td class="tc">${n.serie}</td>
         <td>${format(new Date(n.dhEmi), 'dd/MM/yyyy HH:mm')}</td>
@@ -114,7 +141,30 @@ export async function generateEntradasSaidasReport(filters: ReportFilters): Prom
         <td class="mono chave">${formatChave(n.chNFe)}</td>
         <td><span class="badge badge-green">Autorizada</span></td>
       </tr>`
-    )
+  }
+
+  // Uma tabela + total por modelo (NF-e / NFC-e), em vez de uma lista única.
+  const notasPorModeloHtml = autorizadasPorModelo
+    .map(({ label, list }) => {
+      const vProd = list.reduce((s, n) => s + Number(n.vProd), 0)
+      const vTotal = list.reduce((s, n) => s + Number(n.vNF), 0)
+      return `
+<h2>Notas Autorizadas — ${label} <span class="count">${list.length} notas</span></h2>
+<table>
+  <thead>
+    <tr><th>Nº NF</th><th>Série</th><th>Emissão</th><th class="tr">Vl. Prod.</th><th class="tr">Vl. Total</th><th>Chave de Acesso</th><th>Status</th></tr>
+  </thead>
+  <tbody>
+    ${list.map(notaRow).join('')}
+    <tr class="total-row">
+      <td colspan="3"><strong>TOTAL ${label} — ${list.length} notas</strong></td>
+      <td class="tr">${fmtCur(vProd)}</td>
+      <td class="tr">${fmtCur(vTotal)}</td>
+      <td colspan="2"></td>
+    </tr>
+  </tbody>
+</table>`
+    })
     .join('')
 
   const faltantesRows = faltantesGrupos
@@ -177,21 +227,7 @@ export async function generateEntradasSaidasReport(filters: ReportFilters): Prom
   <div class="card"><div class="lbl">Período</div><div class="val periodo">${competenciaLabel}</div></div>
 </div>
 
-<h2>Notas Autorizadas <span class="count">${autorizadas.length} notas</span></h2>
-<table>
-  <thead>
-    <tr><th>Nº NF</th><th>Série</th><th>Emissão</th><th class="tr">Vl. Prod.</th><th class="tr">Vl. Total</th><th>Chave de Acesso</th><th>Status</th></tr>
-  </thead>
-  <tbody>
-    ${notesRows}
-    <tr class="total-row">
-      <td colspan="3"><strong>TOTAIS — ${autorizadas.length} notas</strong></td>
-      <td class="tr">${fmtCur(vProdTotal)}</td>
-      <td class="tr">${fmtCur(totalGeral)}</td>
-      <td colspan="2"></td>
-    </tr>
-  </tbody>
-</table>
+${notasPorModeloHtml}
 
 ${faltantesGrupos.length > 0 ? `
 <h2 class="falt-title">⚠ Notas Faltantes <span class="count">${totalFaltantes} notas</span></h2>
@@ -204,9 +240,9 @@ ${faltantesGrupos.length > 0 ? `
 <table class="consolidado">
   <thead><tr><th>Descrição</th><th class="tr">Qtd.</th><th class="tr">Vl. Produtos</th><th class="tr">Vl. Desc.</th><th class="tr">Vl. ICMS</th><th class="tr">Vl. Total</th></tr></thead>
   <tbody>
-    <tr><td>Notas de Saída (Autorizadas)</td><td class="tr">${saidas.length}</td><td class="tr">${fmtCur(saidas.reduce((s, n) => s + Number(n.vProd), 0))}</td><td class="tr">${fmtCur(saidas.reduce((s, n) => s + Number(n.vDesc), 0))}</td><td class="tr">${fmtCur(saidas.reduce((s, n) => s + Number(n.vICMS), 0))}</td><td class="tr fw">${fmtCur(totalSaidas)}</td></tr>
-    <tr><td>Notas de Entrada (Autorizadas)</td><td class="tr">${entradas.length}</td><td class="tr">${fmtCur(entradas.reduce((s, n) => s + Number(n.vProd), 0))}</td><td class="tr">${fmtCur(entradas.reduce((s, n) => s + Number(n.vDesc), 0))}</td><td class="tr">${fmtCur(entradas.reduce((s, n) => s + Number(n.vICMS), 0))}</td><td class="tr fw">${fmtCur(totalEntradas)}</td></tr>
-    <tr><td>Notas Canceladas</td><td class="tr">${canceladas.length}</td><td class="tr">${fmtCur(canceladas.reduce((s, n) => s + Number(n.vProd), 0))}</td><td class="tr">–</td><td class="tr">–</td><td class="tr">${fmtCur(canceladas.reduce((s, n) => s + Number(n.vNF), 0))}</td></tr>
+    ${saidasPorModelo.map((g) => consolidadoRow(`Notas de Saída — ${g.label}`, g.list)).join('')}
+    ${entradasPorModelo.map((g) => consolidadoRow(`Notas de Entrada — ${g.label}`, g.list)).join('')}
+    ${canceladasPorModelo.map((g) => consolidadoRow(`Notas Canceladas — ${g.label}`, g.list)).join('')}
     <tr><td>Notas Faltantes</td><td class="tr">${totalFaltantes}</td><td class="tr">–</td><td class="tr">–</td><td class="tr">–</td><td class="tr">–</td></tr>
     <tr class="total"><td><strong>TOTAL GERAL</strong></td><td class="tr fw">${autorizadas.length}</td><td class="tr fw">${fmtCur(vProdTotal)}</td><td class="tr fw">${fmtCur(vDescTotal)}</td><td class="tr fw">${fmtCur(vICMSTotal)}</td><td class="tr fw">${fmtCur(totalGeral)}</td></tr>
   </tbody>
