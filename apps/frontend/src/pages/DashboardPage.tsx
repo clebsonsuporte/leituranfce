@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   FileText, ArrowDownCircle, ArrowUpCircle, XCircle, ShoppingCart, DollarSign,
-  Receipt, TrendingUp, AlertTriangle, ListX, X, ChevronDown, ChevronRight,
+  Receipt, TrendingUp, AlertTriangle, ListX, X, ChevronDown, ChevronRight, ShieldAlert,
 } from 'lucide-react'
 import KpiCard from '@/components/dashboard/KpiCard'
 import MonthlyTrendChart from '@/components/dashboard/MonthlyTrendChart'
@@ -16,9 +16,11 @@ import {
   useTopClients,
   useMissingNotes,
   type MissingNotesGroup,
+  useSemProtocoloNotes,
+  type SemProtocoloGroup,
 } from '@/hooks/useDashboard'
 import { useFilterStore } from '@/stores/filterStore'
-import { formatCurrency, formatCompetencia, formatCNPJ } from '@/lib/utils'
+import { formatCurrency, formatCompetencia, formatCNPJ, formatChNFe, formatDateTime } from '@/lib/utils'
 
 export default function DashboardPage() {
   const { selectedCompetencia } = useFilterStore()
@@ -27,6 +29,8 @@ export default function DashboardPage() {
   const { data: clients = [], isLoading: clientsLoading } = useTopClients(5)
   const { data: missingData, isLoading: missingLoading } = useMissingNotes()
   const [showMissingModal, setShowMissingModal] = useState(false)
+  const { data: semProtocoloData, isLoading: semProtocoloLoading } = useSemProtocoloNotes()
+  const [showSemProtocoloModal, setShowSemProtocoloModal] = useState(false)
 
   return (
     <div className="space-y-6">
@@ -38,12 +42,19 @@ export default function DashboardPage() {
         </p>
       </div>
 
-      {/* Missing Notes Card */}
-      <MissingNotesCard
-        total={missingData?.total ?? 0}
-        isLoading={missingLoading}
-        onClick={() => setShowMissingModal(true)}
-      />
+      {/* Missing Notes + Sem Protocolo Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <MissingNotesCard
+          total={missingData?.total ?? 0}
+          isLoading={missingLoading}
+          onClick={() => setShowMissingModal(true)}
+        />
+        <SemProtocoloCard
+          total={semProtocoloData?.total ?? 0}
+          isLoading={semProtocoloLoading}
+          onClick={() => setShowSemProtocoloModal(true)}
+        />
+      </div>
 
       {/* Missing Notes Modal — rendered via portal so it escapes overflow:hidden */}
       {showMissingModal && createPortal(
@@ -51,6 +62,16 @@ export default function DashboardPage() {
           groups={missingData?.groups ?? []}
           competencia={selectedCompetencia}
           onClose={() => setShowMissingModal(false)}
+        />,
+        document.body
+      )}
+
+      {/* Sem Protocolo Modal */}
+      {showSemProtocoloModal && createPortal(
+        <SemProtocoloModal
+          groups={semProtocoloData?.groups ?? []}
+          competencia={selectedCompetencia}
+          onClose={() => setShowSemProtocoloModal(false)}
         />,
         document.body
       )}
@@ -403,6 +424,147 @@ function MissingNotesModal({
         <div className="px-6 py-3 border-t border-gray-100 bg-gray-50 rounded-b-2xl">
           <p className="text-xs text-gray-400">
             💡 Notas ausentes podem indicar XMLs não importados, cancelamentos sem evento ou falhas no envio.
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Sem Protocolo Card ────────────────────────────────────────────────────────
+
+function SemProtocoloCard({
+  total,
+  isLoading,
+  onClick,
+}: {
+  total: number
+  isLoading: boolean
+  onClick: () => void
+}) {
+  if (isLoading) {
+    return <Skeleton className="h-16 w-full rounded-xl" />
+  }
+
+  const hasIssues = total > 0
+
+  return (
+    <button
+      onClick={onClick}
+      disabled={!hasIssues}
+      className={`w-full text-left rounded-xl border px-5 py-4 flex items-center gap-4 transition-all ${
+        hasIssues
+          ? 'bg-amber-50 border-amber-200 hover:bg-amber-100 hover:shadow-md active:scale-[0.99]'
+          : 'bg-green-50 border-green-200'
+      }`}
+    >
+      <div className={`h-10 w-10 rounded-lg flex items-center justify-center shrink-0 ${
+        hasIssues ? 'bg-amber-100' : 'bg-green-100'
+      }`}>
+        <ShieldAlert className={`h-5 w-5 ${hasIssues ? 'text-amber-600' : 'text-green-600'}`} />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className={`text-xs font-semibold uppercase tracking-wide ${hasIssues ? 'text-amber-600' : 'text-green-600'}`}>
+          Notas Sem Protocolo SEFAZ
+        </p>
+        <p className={`text-2xl font-bold leading-tight ${hasIssues ? 'text-amber-700' : 'text-green-700'}`}>
+          {total}
+        </p>
+        <p className={`text-xs mt-0.5 ${hasIssues ? 'text-amber-500' : 'text-green-500'}`}>
+          {hasIssues
+            ? `${total} nota(s) sem confirmação da SEFAZ · clique para ver`
+            : 'Todas as notas têm protocolo ✓'}
+        </p>
+      </div>
+      {hasIssues && (
+        <ChevronRight className="h-5 w-5 text-amber-400 shrink-0" />
+      )}
+    </button>
+  )
+}
+
+// ─── Sem Protocolo Modal ───────────────────────────────────────────────────────
+
+function SemProtocoloModal({
+  groups,
+  competencia,
+  onClose,
+}: {
+  groups: SemProtocoloGroup[]
+  competencia: string
+  onClose: () => void
+}) {
+  const modLabel = (mod: number) => mod === 55 ? 'NF-e' : mod === 65 ? 'NFC-e' : `Mod ${mod}`
+  const total = groups.reduce((s, g) => s + g.notes.length, 0)
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      {/* Backdrop */}
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+
+      {/* Panel */}
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <div className="flex items-center gap-3">
+            <div className="h-9 w-9 rounded-lg bg-amber-100 flex items-center justify-center">
+              <ShieldAlert className="h-5 w-5 text-amber-600" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-gray-900">Notas Sem Protocolo SEFAZ</h2>
+              <p className="text-xs text-gray-500">
+                Competência: {formatCompetencia(competencia)} · {total} nota(s)
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="h-8 w-8 rounded-lg flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3">
+          {groups.length === 0 ? (
+            <div className="text-center py-12 text-gray-400">
+              <ShieldAlert className="h-10 w-10 mx-auto mb-2 opacity-30" />
+              <p className="text-sm">Nenhuma nota sem protocolo neste período</p>
+            </div>
+          ) : (
+            groups.map((group) => (
+              <div key={group.companyId} className="border border-gray-200 rounded-xl overflow-hidden">
+                <div className="flex items-center justify-between px-4 py-3 bg-gray-50">
+                  <span className="text-sm font-medium text-gray-800 truncate max-w-[220px]">
+                    {group.companyName}
+                  </span>
+                  <span className="text-xs font-bold text-amber-600 bg-amber-100 px-2 py-0.5 rounded-full">
+                    {group.notes.length} nota{group.notes.length > 1 ? 's' : ''}
+                  </span>
+                </div>
+                <div className="divide-y divide-gray-100">
+                  {group.notes.map((n) => (
+                    <div key={n.id} className="px-4 py-2.5 flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-gray-800">
+                          {modLabel(n.mod)} {n.nNF}/{n.serie}
+                        </p>
+                        <p className="text-[11px] text-gray-400 font-mono truncate">{formatChNFe(n.chNFe)}</p>
+                      </div>
+                      <span className="text-xs text-gray-400 shrink-0">{formatDateTime(n.dhEmi)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-3 border-t border-gray-100 bg-gray-50 rounded-b-2xl">
+          <p className="text-xs text-gray-400">
+            💡 O XML importado é só o documento assinado pelo emitente, sem o protocolo de autorização da SEFAZ (sem cStat/nProt). Procure o arquivo correto (nfeProc/procNFe) ou confira a situação direto no site da SEFAZ.
           </p>
         </div>
       </div>

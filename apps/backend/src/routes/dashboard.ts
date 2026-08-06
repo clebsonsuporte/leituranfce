@@ -310,6 +310,41 @@ const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send({ total, groups: result })
   })
 
+  // GET /dashboard/sem-protocolo — notas importadas sem <protNFe> da SEFAZ
+  // (achado real: nota 21274, BR AUTOPEÇAS — o XML era só o <NFe> assinado
+  // pelo emitente, sem confirmação de autorização). Agrupado por empresa
+  // pra facilitar achar o arquivo correto (nfeProc/procNFe) de cada uma.
+  fastify.get('/sem-protocolo', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const query = request.query as { companyId?: string; competencia?: string }
+
+    const where: Record<string, unknown> = { status: 'SEM_PROTOCOLO' }
+    if (query.companyId) where.companyId = query.companyId
+    if (query.competencia) where.competencia = query.competencia
+
+    const nfes = await prisma.nfe.findMany({
+      where,
+      select: {
+        id: true, nNF: true, serie: true, mod: true, chNFe: true, dhEmi: true,
+        companyId: true, company: { select: { name: true } },
+      },
+      orderBy: { dhEmi: 'desc' },
+    })
+
+    const groups = new Map<
+      string,
+      { companyId: string; companyName: string; notes: Array<{ id: string; nNF: string; serie: string; mod: number; chNFe: string; dhEmi: Date }> }
+    >()
+    for (const nfe of nfes) {
+      const key = nfe.companyId
+      if (!groups.has(key)) {
+        groups.set(key, { companyId: nfe.companyId, companyName: nfe.company?.name ?? nfe.companyId, notes: [] })
+      }
+      groups.get(key)!.notes.push({ id: nfe.id, nNF: nfe.nNF, serie: nfe.serie, mod: nfe.mod, chNFe: nfe.chNFe, dhEmi: nfe.dhEmi })
+    }
+
+    return reply.send({ total: nfes.length, groups: [...groups.values()] })
+  })
+
   // GET /dashboard/top-clients
   fastify.get('/top-clients', { preHandler: [fastify.authenticate] }, async (request, reply) => {
     const query = request.query as { companyId?: string; competencia?: string; limit?: string }

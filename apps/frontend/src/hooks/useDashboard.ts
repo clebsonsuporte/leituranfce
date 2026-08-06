@@ -122,6 +122,26 @@ export function useMissingNotes() {
   })
 }
 
+export interface SemProtocoloGroup {
+  companyId: string
+  companyName: string
+  notes: Array<{ id: string; nNF: string; serie: string; mod: number; chNFe: string; dhEmi: string }>
+}
+
+export function useSemProtocoloNotes() {
+  const filters = useFilters()
+  return useQuery({
+    queryKey: ['dashboard', 'sem-protocolo', filters],
+    queryFn: async () => {
+      const params = new URLSearchParams()
+      if (filters.companyId) params.set('companyId', filters.companyId)
+      if (filters.competencia) params.set('competencia', filters.competencia)
+      const { data } = await api.get(`/dashboard/sem-protocolo?${params}`)
+      return data as { total: number; groups: SemProtocoloGroup[] }
+    },
+  })
+}
+
 export function useTopClients(limit = 5) {
   const filters = useFilters()
   return useQuery({
