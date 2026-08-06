@@ -162,15 +162,28 @@ export async function processXmlFiles(
         return
       }
 
-      // Auto-create company if it doesn't exist (by emitCnpj) — cached per CNPJ
+      // Auto-create company if it doesn't exist — cached per CNPJ.
+      //
+      // Achado real (CJC CONSTRUCOES aparecendo como "cliente" com 0 saídas):
+      // em nota de SAÍDA (tpNF=1) quem emite é o próprio cliente do
+      // escritório, então emitCnpj está certo. Mas em nota de ENTRADA
+      // (tpNF=0) quem emite é o FORNECEDOR — usar emitCnpj ali cria uma
+      // empresa fantasma para cada fornecedor que vendeu pra um cliente real,
+      // e a nota de entrada (que devia ficar no cliente, via destCnpj) fica
+      // arquivada por engano embaixo do fornecedor. O "dono" da nota pro
+      // escritório é sempre quem NÃO é a contraparte da operação: emitente
+      // na saída, destinatário na entrada.
+      const subjectCnpj = nfe.tpNF === 0 && nfe.destCnpj ? nfe.destCnpj : nfe.emitCnpj
+      const subjectNome = nfe.tpNF === 0 && nfe.destCnpj ? (nfe.destNome || nfe.emitNome) : nfe.emitNome
+
       let resolvedCompanyId = companyId
       if (!companyId || companyId === 'auto') {
-        const cached = companyCache.get(nfe.emitCnpj)
+        const cached = companyCache.get(subjectCnpj)
         if (cached) {
           resolvedCompanyId = cached
         } else {
-          resolvedCompanyId = await resolveOrCreateCompany(nfe.emitCnpj, nfe.emitNome)
-          companyCache.set(nfe.emitCnpj, resolvedCompanyId)
+          resolvedCompanyId = await resolveOrCreateCompany(subjectCnpj, subjectNome)
+          companyCache.set(subjectCnpj, resolvedCompanyId)
           // Backfill importLog companyId on first resolution
           await prisma.importLog.updateMany({
             where: { id: logId, companyId: null },
