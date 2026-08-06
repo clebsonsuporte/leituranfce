@@ -117,39 +117,61 @@ export async function processXmlFiles(
     }
   }
 
-  // Process NF-e files with bounded concurrency. Each file is fully isolated
-  // in its own try/catch — one bad file (CNPJ inválido, race de conexão, XML
-  // corrompido) nunca deve derrubar o restante do lote.
-  await runPool(nfeFiles, IMPORT_CONCURRENCY, async (file) => {
-    const xmlContent = file.buffer.toString('utf-8')
-    const parseResult = parseXml(xmlContent)
-
+  // Parse tudo primeiro (é só CPU/string parsing, sem I/O) pra poder olhar o
+  // lote inteiro antes de decidir a quem cada nota pertence.
+  //
+  // Achado real (CJC CONSTRUCOES E DISTRIBUICOES virou "empresa" com 2
+  // notas): o lote veio da pasta de um cliente real no Drive (destinatário
+  // de fato é J & D COMERCIO DE MATERIAIS DE CONSTRUCAO), mas o XML é a nota
+  // de VENDA da própria CJC (fornecedora) — tpNF=1, emitCnpj=CJC. tpNF
+  // sempre reflete a operação de quem assina o XML, nunca do destinatário;
+  // não dá pra usar tpNF pra saber "de quem é essa nota" isoladamente. Usar
+  // emitCnpj sempre criava uma empresa fantasma pra cada fornecedor cuja
+  // nota de venda ao cliente apareceu na pasta dele (ex.: baixada via
+  // Manifestação do Destinatário).
+  //
+  // Como cada chamada de processXmlFiles já corresponde a um lote de UMA
+  // pasta de cliente no Drive (ou um upload manual do mesmo cliente), o CNPJ
+  // que mais aparece — como emitente OU destinatário — em TODO o lote é,
+  // com folga, o cliente de verdade: as notas de venda dele (emitCnpj) são
+  // a maioria; as poucas notas de compra de fornecedores (destCnpj=cliente)
+  // são minoria. Isso só entra em ação no modo "auto" — quando o usuário já
+  // escolheu a empresa manualmente, não há ambiguidade a resolver.
+  const parsedFiles: { file: ImportFile; nfe: ParsedNfe }[] = []
+  for (const file of nfeFiles) {
+    const parseResult = parseXml(file.buffer.toString('utf-8'))
     if (parseResult.type === 'non_fiscal') {
-      // Envelope técnico da SEFAZ (lote/GTIN) que acompanha os XMLs de nota
-      // na mesma pasta do Drive — não é erro, não há nota para importar.
       results.push({ filename: file.filename, status: 'skipped', error: parseResult.error })
-      await prisma.importLog.update({
-        where: { id: logId },
-        data: { processed: { increment: 1 } },
-      })
-      return
+      await prisma.importLog.update({ where: { id: logId }, data: { processed: { increment: 1 } } })
+      continue
     }
-
     if (parseResult.type === 'unknown' || !parseResult.nfe) {
-      results.push({
-        filename: file.filename,
-        status: 'error',
-        error: parseResult.error || 'Could not parse XML',
-      })
+      results.push({ filename: file.filename, status: 'error', error: parseResult.error || 'Could not parse XML' })
       await prisma.importLog.update({
         where: { id: logId },
         data: { errors: { increment: 1 }, processed: { increment: 1 } },
       })
-      return
+      continue
     }
+    parsedFiles.push({ file, nfe: parseResult.nfe })
+  }
 
-    const nfe: ParsedNfe = parseResult.nfe
+  let anchorCnpj: string | undefined
+  if (!companyId || companyId === 'auto') {
+    const freq = new Map<string, number>()
+    for (const { nfe } of parsedFiles) {
+      freq.set(nfe.emitCnpj, (freq.get(nfe.emitCnpj) || 0) + 1)
+      if (nfe.destCnpj) freq.set(nfe.destCnpj, (freq.get(nfe.destCnpj) || 0) + 1)
+    }
+    if (freq.size > 0) {
+      anchorCnpj = [...freq.entries()].sort((a, b) => b[1] - a[1])[0][0]
+    }
+  }
 
+  // Process NF-e files with bounded concurrency. Each file is fully isolated
+  // in its own try/catch — one bad file (CNPJ inválido, race de conexão, XML
+  // corrompido) nunca deve derrubar o restante do lote.
+  await runPool(parsedFiles, IMPORT_CONCURRENCY, async ({ file, nfe }) => {
     try {
       // Check for duplicate by xmlHash
       const existing = await prisma.nfe.findUnique({ where: { xmlHash: nfe.xmlHash } })
@@ -162,19 +184,15 @@ export async function processXmlFiles(
         return
       }
 
-      // Auto-create company if it doesn't exist — cached per CNPJ.
-      //
-      // Achado real (CJC CONSTRUCOES aparecendo como "cliente" com 0 saídas):
-      // em nota de SAÍDA (tpNF=1) quem emite é o próprio cliente do
-      // escritório, então emitCnpj está certo. Mas em nota de ENTRADA
-      // (tpNF=0) quem emite é o FORNECEDOR — usar emitCnpj ali cria uma
-      // empresa fantasma para cada fornecedor que vendeu pra um cliente real,
-      // e a nota de entrada (que devia ficar no cliente, via destCnpj) fica
-      // arquivada por engano embaixo do fornecedor. O "dono" da nota pro
-      // escritório é sempre quem NÃO é a contraparte da operação: emitente
-      // na saída, destinatário na entrada.
-      const subjectCnpj = nfe.tpNF === 0 && nfe.destCnpj ? nfe.destCnpj : nfe.emitCnpj
-      const subjectNome = nfe.tpNF === 0 && nfe.destCnpj ? (nfe.destNome || nfe.emitNome) : nfe.emitNome
+      // Se o "dono" do lote (anchorCnpj) é o destinatário desta nota — e não
+      // o emitente — é uma compra do cliente pra um fornecedor: registra
+      // como ENTRADA pro cliente, mesmo que o XML (do ponto de vista de quem
+      // emitiu) diga tpNF=1. emitCnpj/emitNome continuam fiéis ao documento
+      // real (quem de fato emitiu) — só a empresa "dona" e o tpNF mudam.
+      const isCompraDoAnchor = !!anchorCnpj && nfe.emitCnpj !== anchorCnpj && nfe.destCnpj === anchorCnpj
+      const effectiveTpNF = isCompraDoAnchor ? 0 : nfe.tpNF
+      const subjectCnpj = anchorCnpj ?? nfe.emitCnpj
+      const subjectNome = isCompraDoAnchor ? (nfe.destNome || nfe.emitNome) : nfe.emitNome
 
       let resolvedCompanyId = companyId
       if (!companyId || companyId === 'auto') {
@@ -202,7 +220,7 @@ export async function processXmlFiles(
           nNF: nfe.nNF,
           dhEmi: nfe.dhEmi,
           competencia: nfe.competencia,
-          tpNF: nfe.tpNF,
+          tpNF: effectiveTpNF,
           natOp: nfe.natOp,
           emitCnpj: nfe.emitCnpj,
           emitNome: nfe.emitNome,
