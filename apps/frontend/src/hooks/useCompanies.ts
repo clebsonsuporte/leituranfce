@@ -90,7 +90,8 @@ export function useDeleteCompany() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (id: string) => {
-      await api.delete(`/companies/${id}`)
+      const { data } = await api.delete(`/companies/${id}`)
+      return data as { success: boolean; deletedNfes: number }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['companies'] })

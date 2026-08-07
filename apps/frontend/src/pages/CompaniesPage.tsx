@@ -82,13 +82,16 @@ export default function CompaniesPage() {
     }
   }
 
-  async function handleDelete(id: string, name: string) {
-    if (!confirm(`Desativar empresa "${name}"?`)) return
+  async function handleDelete(id: string, name: string, nfeCount: number) {
+    const warning = nfeCount > 0
+      ? `Excluir "${name}" definitivamente? Isso vai apagar também as ${nfeCount.toLocaleString('pt-BR')} nota(s) fiscais dela. Essa ação não pode ser desfeita.`
+      : `Excluir "${name}" definitivamente? Essa ação não pode ser desfeita.`
+    if (!confirm(warning)) return
     try {
-      await deleteMutation.mutateAsync(id)
-      toast.success('Empresa desativada', name)
+      const result = await deleteMutation.mutateAsync(id)
+      toast.success('Empresa excluída', `${name} — ${result.deletedNfes.toLocaleString('pt-BR')} nota(s) removida(s) junto`)
     } catch {
-      toast.error('Erro ao desativar empresa')
+      toast.error('Erro ao excluir empresa')
     }
   }
 
@@ -198,8 +201,7 @@ export default function CompaniesPage() {
                             variant="ghost"
                             size="icon"
                             className="h-7 w-7"
-                            onClick={() => handleDelete(company.id, company.name)}
-                            disabled={!company.active}
+                            onClick={() => handleDelete(company.id, company.name, company._count.nfes)}
                           >
                             <Trash2 className="h-3.5 w-3.5 text-red-400" />
                           </Button>

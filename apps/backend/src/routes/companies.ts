@@ -107,7 +107,12 @@ const companiesRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send({ company: updated })
   })
 
-  // DELETE /companies/:id (soft delete)
+  // DELETE /companies/:id — exclusão definitiva (o botão antes só desativava,
+  // por isso empresas "excluídas" continuavam aparecendo como inativas). NF-e
+  // (e itens/eventos, que já cascade a partir dela), DfeSyncLog e Alert não
+  // têm onDelete: Cascade a partir de Company — apagados explicitamente aqui,
+  // numa transação, antes de apagar a empresa. ImportLog.companyId é opcional
+  // e vira null em vez de apagado, pra manter o histórico de importações.
   fastify.delete('/:id', { preHandler: [fastify.authenticate] }, async (request, reply) => {
     const { id } = request.params as { id: string }
 
@@ -116,12 +121,16 @@ const companiesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(404).send({ error: 'Company not found' })
     }
 
-    await prisma.company.update({
-      where: { id },
-      data: { active: false },
+    const deletedNfes = await prisma.$transaction(async (tx) => {
+      await tx.dfeSyncLog.deleteMany({ where: { companyId: id } })
+      await tx.alert.deleteMany({ where: { companyId: id } })
+      await tx.importLog.updateMany({ where: { companyId: id }, data: { companyId: null } })
+      const { count } = await tx.nfe.deleteMany({ where: { companyId: id } })
+      await tx.company.delete({ where: { id } })
+      return count
     })
 
-    return reply.send({ success: true })
+    return reply.send({ success: true, deletedNfes })
   })
 
   // GET /companies/:id/stats
