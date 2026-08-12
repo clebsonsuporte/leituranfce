@@ -35,12 +35,14 @@ export const ESTADOS_7PCT_DESTINO = [
 ] as const
 
 /**
- * Alíquotas ICMS internas por UF (alíquota geral/modal - 2025)
- * Fonte: legislações estaduais vigentes
+ * Alíquotas ICMS internas por UF (alíquota geral/modal, revisada ago/2026)
+ * Fonte: legislações estaduais vigentes, cruzadas em ago/2026 contra
+ * múltiplas tabelas atualizadas de 2026 (achados: AL, MA, PR, PI e SE
+ * estavam desatualizadas — corrigidas abaixo com a fonte da mudança)
  */
 export const ALIQUOTA_INTERNA_ICMS: Record<UF, number> = {
   AC: 19,    // Lei 1.481/2002 e alterações
-  AL: 19,    // Lei 5.900/1996 e alterações
+  AL: 20.5,  // Lei 9.776/2025 — subiu de 19% pra 20,5% em 01/04/2026
   AP: 18,    // Lei 400/1997 e alterações
   AM: 20,    // Lei 2.826/2003 e alterações
   BA: 20.5,  // Lei 7.014/1996 e alterações
@@ -48,15 +50,15 @@ export const ALIQUOTA_INTERNA_ICMS: Record<UF, number> = {
   DF: 20,    // Lei 1.254/1996 e alterações
   ES: 17,    // Lei 7.000/2001 e alterações
   GO: 19,    // Lei 11.651/1991 e alterações
-  MA: 22,    // Lei 7.799/2002 e alterações
+  MA: 23,    // Lei 7.799/2002 e alterações — atualizada pra 23% em 2026
   MT: 17,    // Lei 7.098/1998 e alterações
   MS: 17,    // Lei 1.810/1997 e alterações
   MG: 18,    // Lei 6.763/1975 e alterações (Lei 23.081/2018)
   PA: 19,    // Lei 5.530/1989 e alterações
   PB: 20,    // Lei 6.379/1996 e alterações
-  PR: 19,    // Lei 11.580/1996 e alterações (Decreto 7.871/2017)
+  PR: 19.5,  // Lei 11.580/1996 e alterações — atualizada pra 19,5% em 2026
   PE: 20.5,  // Lei 15.730/2016 e alterações
-  PI: 21,    // Lei 4.257/1989 e alterações
+  PI: 22.5,  // Lei 4.257/1989 e alterações — atualizada pra 22,5% em 2026
   RJ: 22,    // Lei 2.657/1996 e alterações
   RN: 20,    // Lei 7.117/1997 e alterações
   RS: 17,    // Lei 8.820/1989 e alterações
@@ -64,7 +66,7 @@ export const ALIQUOTA_INTERNA_ICMS: Record<UF, number> = {
   RR: 20,    // Lei 59/1993 e alterações
   SC: 17,    // Lei 10.297/1996 e alterações
   SP: 18,    // Lei 6.374/1989 e alterações (Decreto 65.254/2020)
-  SE: 19,    // Lei 3.796/1996 e alterações
+  SE: 20,    // Lei 3.796/1996 (19%) + 1% Fundo de Combate à Pobreza = 20%
   TO: 20,    // Lei 1.287/2001 e alterações
 }
 
