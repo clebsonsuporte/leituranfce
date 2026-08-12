@@ -814,7 +814,7 @@ export default function TaxPage() {
                     </thead>
                     <tbody>
                       {resultado.reformaTributaria.transicaoAtual && [
-                        { ano: 2026, cbs: 0.9,  ibs: 0,    observacao: 'Ano-teste' },
+                        { ano: 2026, cbs: 0.9,  ibs: 0.1,  observacao: 'Ano-teste' },
                         { ano: 2027, cbs: 9.9,  ibs: 0,    observacao: 'CBS plena' },
                         { ano: 2028, cbs: 9.9,  ibs: 3.25, observacao: 'IBS inicia' },
                         { ano: 2030, cbs: 9.9,  ibs: 9.75, observacao: 'IBS fase 3' },

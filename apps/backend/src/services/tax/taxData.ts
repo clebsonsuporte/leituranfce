@@ -602,7 +602,7 @@ export const REFORMA_TRIBUTARIA = {
     fontes: ['LC 214/2025, art. 3°-30', 'CGIBS — resolução em elaboração'],
   },
   transicao: [
-    { ano: 2026, cbs: 0.9, ibs: 0, observacao: 'Ano-teste: CBS reduzida, IBS 0%' },
+    { ano: 2026, cbs: 0.9, ibs: 0.1, observacao: 'Ano-teste: CBS 0,9% + IBS 0,1% (0,1% UF + 0% Município) — confirmado pelo CGIBS/Receita Federal e por XMLs reais autorizados' },
     { ano: 2027, cbs: 9.9, ibs: 0, observacao: 'CBS plena, IBS ainda 0%' },
     { ano: 2028, cbs: 9.9, ibs: 3.25, observacao: 'IBS inicia transição (fase 1)' },
     { ano: 2029, cbs: 9.9, ibs: 6.5, observacao: 'IBS fase 2' },
