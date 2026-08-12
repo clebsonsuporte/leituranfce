@@ -345,7 +345,7 @@ export function calcularTributos(input: TaxConsultaInput): TaxConsultaOutput {
     cbs: {
       aliquota: transicaoAtual.cbs,
       anoVigor: anoAtual,
-      observacao: `CBS ${transicaoAtual.cbs}% em ${anoAtual}. Substitui PIS/COFINS. LC 214/2025, art. 99.`,
+      observacao: `CBS ${transicaoAtual.cbs}% em ${anoAtual}. Substitui PIS/COFINS. LC 214/2025.`,
     },
     ibs: {
       aliquotaEstimada: transicaoAtual.ibs,

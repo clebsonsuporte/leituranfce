@@ -580,55 +580,62 @@ export function calcularPisCofins(params: {
 
 // ─── REFORMA TRIBUTÁRIA — LC 214/2025 ────────────────────────────────────────
 /**
- * Alíquotas de referência aprovadas pela LC 214/2025
- * Vigência: transição 2026-2033, plena a partir de 2033
+ * Cronograma de transição da LC 214/2025, revisado em ago/2026 com base em
+ * fontes oficiais (CGIBS, Receita Federal) e cruzado com XML real autorizado
+ * (grupo IBSCBS, pIBSUF/pIBSMun/pCBS). A tabela anterior deste arquivo tinha
+ * uma progressão linear inventada para 2027-2033 — a lei na verdade define um
+ * mecanismo de SUBSTITUIÇÃO PERCENTUAL do ICMS/ISS pelo IBS entre 2029-2032
+ * (10/20/30/40% da alíquota de referência do IBS a cada ano), não uma reta.
  *
- * Art. 99 LC 214/2025: alíquota de referência CBS = 9,9%
- * IBS: soma das alíquotas estadual + municipal (estimativa ~26,5% total)
- * IS: art. 415 e seguintes LC 214/2025
+ * IMPORTANTE: as alíquotas de referência "plenas" (CBS ~8,8%, IBS ~17,7%)
+ * AINDA NÃO estão fixadas em lei — serão definidas por Resolução do Senado
+ * Federal (LC 214/2025, arts. 353-359 pra CBS, 361-369 pro IBS), ainda não
+ * publicada. São projeções amplamente citadas, não valores definitivos.
  */
 export const REFORMA_TRIBUTARIA = {
   cbs: {
-    aliquotaReferencia: 9.9,
+    aliquotaReferencia: 8.8, // projeção — ainda não fixada por Resolução do Senado
     reducaoSimples: 20,  // % de redução para Simples Nacional
-    vigencia: 'Plena a partir de 2027 (CBS)',
-    fontes: ['LC 214/2025, art. 99', 'Resolução CGIBS em elaboração'],
+    vigencia: 'Plena a partir de 2029 (2027-2028 com redução residual de 0,1 p.p.)',
+    fontes: ['LC 214/2025', 'Resolução do Senado Federal (a publicar) — alíquota de referência ainda não fixada em lei'],
   },
   ibs: {
-    aliquotaEstimadaEstadual: 17.7, // estimativa baseada na proposta do CGIBS
-    aliquotaEstimadaMunicipal: 8.8, // estimativa
-    aliquotaEstimadaTotal: 26.5,
-    vigencia: 'Transição 2026-2032, plena 2033',
-    fontes: ['LC 214/2025, art. 3°-30', 'CGIBS — resolução em elaboração'],
+    aliquotaEstimadaTotal: 17.7, // estadual + municipal combinados — projeção, ainda não fixada por lei
+    vigencia: 'Transição 2029-2032, plena a partir de 2033',
+    fontes: ['LC 214/2025', 'Resolução do Senado Federal (a publicar) — alíquota de referência ainda não fixada em lei'],
   },
   transicao: [
-    { ano: 2026, cbs: 0.9, ibs: 0.1, observacao: 'Ano-teste: CBS 0,9% + IBS 0,1% (0,1% UF + 0% Município) — confirmado pelo CGIBS/Receita Federal e por XMLs reais autorizados' },
-    { ano: 2027, cbs: 9.9, ibs: 0, observacao: 'CBS plena, IBS ainda 0%' },
-    { ano: 2028, cbs: 9.9, ibs: 3.25, observacao: 'IBS inicia transição (fase 1)' },
-    { ano: 2029, cbs: 9.9, ibs: 6.5, observacao: 'IBS fase 2' },
-    { ano: 2030, cbs: 9.9, ibs: 9.75, observacao: 'IBS fase 3' },
-    { ano: 2031, cbs: 9.9, ibs: 13.0, observacao: 'IBS fase 4' },
-    { ano: 2032, cbs: 9.9, ibs: 19.5, observacao: 'IBS fase 5' },
-    { ano: 2033, cbs: 9.9, ibs: 26.5, observacao: 'Regime pleno — PIS/COFINS e ICMS/ISS extintos' },
+    { ano: 2026, cbs: 0.9, ibs: 0.1, observacao: 'Ano-teste: CBS 0,9% + IBS 0,1% (0,1% UF + 0% Município) — confirmado por CGIBS/Receita Federal e por XML real autorizado' },
+    { ano: 2027, cbs: 8.7, ibs: 0.1, observacao: 'PIS/COFINS extintos. CBS com redução residual de 0,1 p.p. (8,8% − 0,1). IBS ainda na alíquota-teste de 0,1%.' },
+    { ano: 2028, cbs: 8.7, ibs: 0.1, observacao: 'Último ano da redução residual de 0,1 p.p. da CBS. IBS segue em 0,1%.' },
+    { ano: 2029, cbs: 8.8, ibs: 1.77, observacao: 'CBS na alíquota de referência plena. IBS a 10% da referência (17,7%). ICMS/ISS reduzidos a 90% do valor atual.' },
+    { ano: 2030, cbs: 8.8, ibs: 3.54, observacao: 'IBS a 20% da referência. ICMS/ISS reduzidos a 80%.' },
+    { ano: 2031, cbs: 8.8, ibs: 5.31, observacao: 'IBS a 30% da referência. ICMS/ISS reduzidos a 70%.' },
+    { ano: 2032, cbs: 8.8, ibs: 7.08, observacao: 'IBS a 40% da referência. ICMS/ISS reduzidos a 60%.' },
+    { ano: 2033, cbs: 8.8, ibs: 17.7, observacao: 'Regime pleno — ICMS e ISS extintos, IBS na alíquota de referência total.' },
   ],
   impostoSeletivo: [
-    { descricao: 'Cigarros e produtos do tabaco',         ncmPrefixos: ['24'],         aliquota: 100, base: 'Art. 415, I, LC 214/2025' },
-    { descricao: 'Bebidas alcoólicas',                    ncmPrefixos: ['22'],         aliquota: 20,  base: 'Art. 415, II, LC 214/2025' },
-    { descricao: 'Veículos (emissão acima do permitido)', ncmPrefixos: ['87'],         aliquota: 10,  base: 'Art. 415, III, LC 214/2025' },
-    { descricao: 'Combustíveis fósseis',                  ncmPrefixos: ['2710','2711'],aliquota: 20,  base: 'Art. 415, IV, LC 214/2025' },
-    { descricao: 'Armas de fogo',                         ncmPrefixos: ['93'],         aliquota: 25,  base: 'Art. 415, V, LC 214/2025' },
-    { descricao: 'Bebidas açucaradas (alc./sódio)',        ncmPrefixos: ['2202','2201'],aliquota: 20,  base: 'Art. 415, VI, LC 214/2025' },
-    { descricao: 'Minérios — extração (por tonelada)',     ncmPrefixos: ['26'],         aliquota: 0.25,base: 'Art. 415, VII, LC 214/2025' },
+    { descricao: 'Cigarros e produtos do tabaco',         ncmPrefixos: ['24'],         aliquota: 100, base: 'Art. 409 e seguintes, LC 214/2025' },
+    { descricao: 'Bebidas alcoólicas',                    ncmPrefixos: ['22'],         aliquota: 20,  base: 'Art. 409 e seguintes, LC 214/2025' },
+    { descricao: 'Veículos (emissão acima do permitido)', ncmPrefixos: ['87'],         aliquota: 10,  base: 'Art. 409 e seguintes, LC 214/2025' },
+    { descricao: 'Combustíveis fósseis',                  ncmPrefixos: ['2710','2711'],aliquota: 20,  base: 'Art. 409 e seguintes, LC 214/2025 — regime monofásico próprio' },
+    { descricao: 'Armas de fogo',                         ncmPrefixos: ['93'],         aliquota: 25,  base: 'Art. 409 e seguintes, LC 214/2025' },
+    { descricao: 'Bebidas açucaradas (alc./sódio)',        ncmPrefixos: ['2202','2201'],aliquota: 20,  base: 'Art. 409 e seguintes, LC 214/2025' },
+    { descricao: 'Minérios — extração (por tonelada)',     ncmPrefixos: ['26'],         aliquota: 0.25,base: 'Art. 409 e seguintes, LC 214/2025' },
   ],
+  // Percentuais amplamente confirmados; referências de artigo/anexo mantidas
+  // no nível de "área da lei" — a classificação exata por NCM depende dos
+  // Anexos I-XV da LC 214/2025 (ex.: só 26 produtos do Anexo I têm zero real;
+  // demais alimentos do Anexo VII têm 60%, não 100%).
   reducoes: [
-    { descricao: 'Alimentos da cesta básica nacional',                reducao: 100, base: 'Art. 108 LC 214/2025' },
-    { descricao: 'Medicamentos e dispositivos médicos',               reducao: 60,  base: 'Art. 114 LC 214/2025' },
-    { descricao: 'Serviços de educação',                              reducao: 60,  base: 'Art. 115 LC 214/2025' },
-    { descricao: 'Serviços de saúde',                                 reducao: 60,  base: 'Art. 116 LC 214/2025' },
-    { descricao: 'Transporte coletivo de passageiros',                reducao: 60,  base: 'Art. 117 LC 214/2025' },
-    { descricao: 'Insumos agropecuários',                             reducao: 60,  base: 'Art. 118 LC 214/2025' },
-    { descricao: 'Serviços financeiros (parcial)',                    reducao: 30,  base: 'Art. 119 LC 214/2025' },
-    { descricao: 'Regime Cashback para baixa renda (devolução)',      reducao: 0,   base: 'Art. 126 LC 214/2025 — devolução diferente' },
+    { descricao: 'Cesta básica nacional (26 produtos — Anexo I)',         reducao: 100, base: 'Anexo I, LC 214/2025' },
+    { descricao: 'Demais alimentos, hortifrúti, ovos (Anexo VII/XV)',     reducao: 60,  base: 'Anexos VII e XV, LC 214/2025' },
+    { descricao: 'Medicamentos e dispositivos médicos',                  reducao: 60,  base: 'Art. 144, LC 214/2025 — pode ser zero conforme o comprador (Anexo IV)' },
+    { descricao: 'Serviços de educação',                                 reducao: 60,  base: 'Arts. 128-134, LC 214/2025' },
+    { descricao: 'Serviços de saúde',                                    reducao: 60,  base: 'Art. 130, LC 214/2025' },
+    { descricao: 'Transporte público coletivo urbano',                   reducao: 100, base: 'LC 214/2025 — isenção, não apenas redução' },
+    { descricao: 'Insumos agropecuários',                                reducao: 60,  base: 'LC 214/2025 — regime específico do agronegócio' },
+    { descricao: 'Serviços financeiros (parcial)',                       reducao: 30,  base: 'Art. 233 e regime específico, LC 214/2025' },
   ],
 }
 

@@ -729,7 +729,7 @@ export default function TaxPage() {
                 <div className="bg-indigo-50 rounded p-3">
                   <p className="text-xs text-indigo-600 font-semibold mb-1">IBS (substitui ICMS+ISS)</p>
                   <p className="text-xl font-bold text-indigo-700">{pct(resultado.reformaTributaria.ibs.aliquotaEstimada)}</p>
-                  <p className="text-xs text-indigo-500 mt-1">Estimativa de transição. Alíquota plena ~{resultado.reformaTributaria.ibs.aliquotaEstimada > 0 ? resultado.reformaTributaria.ibs.aliquotaEstimada : '26,5'}% em 2033</p>
+                  <p className="text-xs text-indigo-500 mt-1">Estimativa de transição. Alíquota plena ~{resultado.reformaTributaria.ibs.aliquotaEstimada > 0 ? resultado.reformaTributaria.ibs.aliquotaEstimada : '17,7'}% em 2033</p>
                 </div>
               </div>
 
@@ -814,11 +814,14 @@ export default function TaxPage() {
                     </thead>
                     <tbody>
                       {resultado.reformaTributaria.transicaoAtual && [
-                        { ano: 2026, cbs: 0.9,  ibs: 0.1,  observacao: 'Ano-teste' },
-                        { ano: 2027, cbs: 9.9,  ibs: 0,    observacao: 'CBS plena' },
-                        { ano: 2028, cbs: 9.9,  ibs: 3.25, observacao: 'IBS inicia' },
-                        { ano: 2030, cbs: 9.9,  ibs: 9.75, observacao: 'IBS fase 3' },
-                        { ano: 2033, cbs: 9.9,  ibs: 26.5, observacao: 'Regime pleno' },
+                        { ano: 2026, cbs: 0.9, ibs: 0.1,  observacao: 'Ano-teste' },
+                        { ano: 2027, cbs: 8.7, ibs: 0.1,  observacao: 'PIS/COFINS extintos' },
+                        { ano: 2028, cbs: 8.7, ibs: 0.1,  observacao: 'Redução residual CBS' },
+                        { ano: 2029, cbs: 8.8, ibs: 1.77, observacao: 'IBS 10% da referência' },
+                        { ano: 2030, cbs: 8.8, ibs: 3.54, observacao: 'IBS 20% da referência' },
+                        { ano: 2031, cbs: 8.8, ibs: 5.31, observacao: 'IBS 30% da referência' },
+                        { ano: 2032, cbs: 8.8, ibs: 7.08, observacao: 'IBS 40% da referência' },
+                        { ano: 2033, cbs: 8.8, ibs: 17.7, observacao: 'Regime pleno' },
                       ].map(t => (
                         <tr
                           key={t.ano}
