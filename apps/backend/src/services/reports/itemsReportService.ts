@@ -17,6 +17,7 @@ function fmtCNPJ(cnpj: string | null | undefined): string {
 interface ReportFilters {
   companyId?: string
   competencia?: string
+  mod?: number
 }
 
 // Junta números faltantes consecutivos numa faixa (ex.: 81105,81106 -> "81105-81106"),
@@ -50,6 +51,7 @@ export async function generateEntradasSaidasReport(filters: ReportFilters): Prom
   const where: Record<string, unknown> = {}
   if (filters.companyId) where.companyId = filters.companyId
   if (filters.competencia) where.competencia = filters.competencia
+  if (filters.mod) where.mod = filters.mod
 
   const nfes = await prisma.nfe.findMany({
     where,
@@ -475,6 +477,228 @@ export async function generatePisCofinsItemsReport(
       timeout: 180_000,
       printBackground: false,
       margin: { top: '12mm', right: '10mm', bottom: '12mm', left: '10mm' },
+    })
+    return Buffer.from(pdf)
+  } finally {
+    await browser.close()
+  }
+}
+
+// ─── Relatório NFC-e por CSOSN / CFOP ────────────────────────────────────────
+
+const CSOSN_DESC: Record<string, string> = {
+  '101': 'Tributada SN c/ permissão de crédito',
+  '102': 'Tributada SN s/ permissão de crédito',
+  '103': 'Isenção ICMS — SN faixa de receita',
+  '201': 'Tributada SN c/ crédito + ICMS-ST',
+  '202': 'Tributada SN s/ crédito + ICMS-ST',
+  '203': 'Isenção SN + ICMS-ST',
+  '300': 'Imune',
+  '400': 'Não tributada (Simples Nacional)',
+  '500': 'ICMS cobrado por ST / antecipação',
+  '900': 'Outros',
+}
+
+export async function generateNfceCsosnReport(filters: ReportFilters): Promise<Buffer> {
+  const whereNfe: Record<string, unknown> = { mod: 65, tpNF: 1 }
+  if (filters.companyId) whereNfe.companyId = filters.companyId
+  if (filters.competencia) whereNfe.competencia = filters.competencia
+
+  const items = await prisma.nfeItem.findMany({
+    where: { nfe: whereNfe },
+    include: { nfe: { select: { nNF: true, dhEmi: true, serie: true, chNFe: true } } },
+    orderBy: [{ nfe: { dhEmi: 'asc' } }, { nfe: { nNF: 'asc' } }, { nItem: 'asc' }],
+    take: 100000,
+  })
+
+  const company = filters.companyId
+    ? await prisma.company.findUnique({ where: { id: filters.companyId } })
+    : null
+
+  const generatedAt = format(new Date(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })
+  const periodoLabel = filters.competencia
+    ? (() => { const [y, m] = filters.competencia.split('-'); return `01/${m}/${y} até ${new Date(Number(y), Number(m), 0).getDate()}/${m}/${y}` })()
+    : 'Todos os períodos'
+
+  // Totais gerais
+  const totalVProd = items.reduce((s, i) => s + Number(i.vProd), 0)
+  const totalVICMS = items.reduce((s, i) => s + Number(i.vICMS), 0)
+  const totalVST   = items.reduce((s, i) => s + Number(i.vST), 0)
+  const notasUnicas = new Set(items.map(i => i.nfeId)).size
+
+  // Agrupa por CFOP
+  const byCfop = new Map<string, { vProd: number; count: number }>()
+  for (const i of items) {
+    const cfop = i.cfop || '—'
+    const cur = byCfop.get(cfop) ?? { vProd: 0, count: 0 }
+    byCfop.set(cfop, { vProd: cur.vProd + Number(i.vProd), count: cur.count + 1 })
+  }
+
+  // Agrupa por CSOSN
+  const byCsosn = new Map<string, { vProd: number; count: number }>()
+  for (const i of items) {
+    const csosn = i.csosnIcms || '—'
+    const cur = byCsosn.get(csosn) ?? { vProd: 0, count: 0 }
+    byCsosn.set(csosn, { vProd: cur.vProd + Number(i.vProd), count: cur.count + 1 })
+  }
+
+  const itemRows = items.map(i => `
+    <tr>
+      <td class="mono">${i.nfe.nNF}</td>
+      <td>${format(new Date(i.nfe.dhEmi), 'dd/MM/yy')}</td>
+      <td class="cProd">${i.cProd || ''}</td>
+      <td class="desc">${(i.xProd || '').substring(0, 40)}</td>
+      <td class="tr">${fmtQtd(Number(i.qCom))}</td>
+      <td class="tr">${fmtCur(Number(i.vUnCom))}</td>
+      <td class="tr fw">${fmtCur(Number(i.vProd))}</td>
+      <td class="tc cfop">${i.cfop || '—'}</td>
+      <td class="tc csosn">${i.csosnIcms || i.cstIcms || '—'}</td>
+      <td class="tr dim">${fmtCur(Number(i.vICMS))}</td>
+      <td class="tr dim">${fmtCur(Number(i.vST))}</td>
+    </tr>`).join('')
+
+  const cfopRows = [...byCfop.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([cfop, { vProd, count }]) => `
+    <tr>
+      <td class="tc cfop">${cfop}</td>
+      <td class="tr">${count}</td>
+      <td class="tr fw">${fmtCur(vProd)}</td>
+      <td class="tr">${totalVProd > 0 ? (vProd / totalVProd * 100).toFixed(1) : '0,0'}%</td>
+    </tr>`).join('')
+
+  const csosnRows = [...byCsosn.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([csosn, { vProd, count }]) => `
+    <tr>
+      <td class="tc csosn">${csosn}</td>
+      <td>${CSOSN_DESC[csosn] || '—'}</td>
+      <td class="tr">${count}</td>
+      <td class="tr fw">${fmtCur(vProd)}</td>
+      <td class="tr">${totalVProd > 0 ? (vProd / totalVProd * 100).toFixed(1) : '0,0'}%</td>
+    </tr>`).join('')
+
+  const html = `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">
+<style>
+  *{box-sizing:border-box}
+  body{font-family:Arial,sans-serif;font-size:8px;color:#1f2937;margin:0}
+  h1{font-size:14px;color:#1e40af;margin:0 0 2px;font-weight:800;letter-spacing:-.3px}
+  .subh{font-size:8px;color:#374151;margin-bottom:1px}
+  .subh b{color:#111827}
+  .cards{display:flex;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;margin:10px 0 12px}
+  .card{flex:1;text-align:center;padding:7px 4px;border-right:1px solid #e5e7eb}
+  .card:last-child{border-right:none}
+  .card .lbl{font-size:6px;text-transform:uppercase;color:#6b7280;letter-spacing:.04em}
+  .card .val{font-size:13px;font-weight:800;margin-top:2px;color:#111827}
+  .card.blue .val{color:#1e40af}
+  .card.green .val{color:#065f46}
+  .card.orange .val{color:#92400e}
+  h2{font-size:10px;font-weight:700;margin:14px 0 5px;color:#1e3a8a;border-bottom:2px solid #1e3a8a;padding-bottom:3px;display:flex;align-items:center;gap:6px}
+  h2 .badge-h{background:#dbeafe;color:#1e40af;border-radius:4px;padding:1px 7px;font-size:7px;font-weight:600;margin-left:auto}
+  table{width:100%;border-collapse:collapse;margin-bottom:4px}
+  thead{display:table-header-group}
+  th{background:#1e3a8a;color:#fff;padding:4px 5px;text-align:left;font-size:7.5px;white-space:nowrap}
+  td{padding:2.5px 5px;border-bottom:1px solid #f3f4f6;font-size:7.5px}
+  tr:nth-child(even) td{background:#f8fafc}
+  .tr{text-align:right}
+  .tc{text-align:center}
+  .fw{font-weight:700}
+  .mono{font-family:Courier,monospace;font-size:7.5px}
+  .desc{max-width:150px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  .cProd{max-width:60px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:#6b7280}
+  .cfop{font-weight:600;color:#1e40af}
+  .csosn{font-weight:700;color:#065f46}
+  .dim{color:#6b7280}
+  tfoot tr td{background:#dbeafe!important;font-weight:700;font-size:8px}
+  .total-cfop{background:#eff6ff!important;font-weight:700}
+  .total-csosn{background:#d1fae5!important;font-weight:700}
+  .footer{margin-top:10px;text-align:center;font-size:6.5px;color:#9ca3af;border-top:1px solid #f3f4f6;padding-top:5px}
+</style></head><body>
+
+<h1>RELATÓRIO NFC-e — CSOSN / CFOP</h1>
+<div class="subh"><b>Empresa:</b> ${company?.name || 'Todas as empresas'}${company?.cnpj ? ` &nbsp;·&nbsp; <b>CNPJ:</b> ${fmtCNPJ(company.cnpj)}` : ''} &nbsp;·&nbsp; <b>Modelo:</b> 65 (NFC-e)</div>
+<div class="subh"><b>Período:</b> ${periodoLabel} &nbsp;·&nbsp; <b>Gerado em:</b> ${generatedAt}</div>
+
+<div class="cards">
+  <div class="card blue"><div class="lbl">NFC-e emitidas</div><div class="val">${notasUnicas}</div></div>
+  <div class="card blue"><div class="lbl">Total de Itens</div><div class="val">${items.length}</div></div>
+  <div class="card green"><div class="lbl">Valor Total Produtos</div><div class="val" style="font-size:10px">R$ ${fmtCur(totalVProd)}</div></div>
+  <div class="card orange"><div class="lbl">ICMS Total</div><div class="val" style="font-size:10px">R$ ${fmtCur(totalVICMS)}</div></div>
+  <div class="card orange"><div class="lbl">ICMS-ST Total</div><div class="val" style="font-size:10px">R$ ${fmtCur(totalVST)}</div></div>
+  <div class="card"><div class="lbl">CFOPs distintos</div><div class="val">${byCfop.size}</div></div>
+  <div class="card"><div class="lbl">CSOSNs distintos</div><div class="val">${byCsosn.size}</div></div>
+</div>
+
+<h2>Itens de NFC-e <span class="badge-h">${items.length} itens</span></h2>
+<table>
+  <thead>
+    <tr>
+      <th>Nº NF</th><th>Data</th><th>Cód.</th><th>Produto</th>
+      <th class="tr">Qtd</th><th class="tr">V.Unit.</th><th class="tr">V.Total</th>
+      <th class="tc">CFOP</th><th class="tc">CSOSN</th>
+      <th class="tr">V.ICMS</th><th class="tr">V.ST</th>
+    </tr>
+  </thead>
+  <tbody>${itemRows}</tbody>
+  <tfoot>
+    <tr>
+      <td colspan="4"><strong>TOTAL — ${items.length} itens / ${notasUnicas} NFC-e</strong></td>
+      <td></td><td></td>
+      <td class="tr">R$ ${fmtCur(totalVProd)}</td>
+      <td colspan="2"></td>
+      <td class="tr">R$ ${fmtCur(totalVICMS)}</td>
+      <td class="tr">R$ ${fmtCur(totalVST)}</td>
+    </tr>
+  </tfoot>
+</table>
+
+<div style="display:flex;gap:16px;margin-top:16px">
+
+<div style="flex:1">
+<h2>Subtotal por CFOP <span class="badge-h">${byCfop.size} CFOPs</span></h2>
+<table>
+  <thead><tr><th class="tc">CFOP</th><th class="tr">Qtd Itens</th><th class="tr">Valor Total</th><th class="tr">%</th></tr></thead>
+  <tbody>${cfopRows}</tbody>
+  <tfoot>
+    <tr class="total-cfop"><td colspan="2"><strong>TOTAL</strong></td><td class="tr">R$ ${fmtCur(totalVProd)}</td><td class="tr">100,0%</td></tr>
+  </tfoot>
+</table>
+</div>
+
+<div style="flex:1.6">
+<h2>Consolidado por CSOSN <span class="badge-h">${byCsosn.size} códigos</span></h2>
+<table>
+  <thead><tr><th class="tc">CSOSN</th><th>Descrição</th><th class="tr">Qtd Itens</th><th class="tr">Valor Total</th><th class="tr">%</th></tr></thead>
+  <tbody>${csosnRows}</tbody>
+  <tfoot>
+    <tr class="total-csosn"><td colspan="3"><strong>TOTAL GERAL</strong></td><td class="tr">R$ ${fmtCur(totalVProd)}</td><td class="tr">100,0%</td></tr>
+  </tfoot>
+</table>
+</div>
+
+</div>
+
+<div class="footer">Fiscal Dashboard · Relatório NFC-e CSOSN/CFOP · Gerado automaticamente em ${generatedAt} · Apenas NFC-e (Modelo 65) de saída</div>
+</body></html>`
+
+  const puppeteer = (await import('puppeteer')).default
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+    protocolTimeout: 300_000,
+  })
+  try {
+    const page = await browser.newPage()
+    await page.setContent(html, { waitUntil: 'networkidle0', timeout: 120_000 })
+    const pdf = await page.pdf({
+      format: 'A4',
+      landscape: true,
+      timeout: 180_000,
+      printBackground: true,
+      margin: { top: '14mm', right: '10mm', bottom: '12mm', left: '10mm' },
+      displayHeaderFooter: true,
+      headerTemplate: `<div style="font-size:6.5px;color:#6b7280;width:100%;padding:0 10mm;display:flex;justify-content:space-between"><span>NFC-e CSOSN/CFOP — ${company?.name || 'Todas as empresas'} — ${periodoLabel}</span><span>${generatedAt}</span></div>`,
+      footerTemplate: `<div style="font-size:6.5px;color:#6b7280;width:100%;padding:0 10mm;text-align:center">Página <span class="pageNumber"></span> de <span class="totalPages"></span></div>`,
     })
     return Buffer.from(pdf)
   } finally {

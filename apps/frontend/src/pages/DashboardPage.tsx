@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import {
   FileText, ArrowDownCircle, ArrowUpCircle, XCircle, ShoppingCart, DollarSign,
   Receipt, TrendingUp, AlertTriangle, ListX, X, ChevronDown, ChevronRight, ShieldAlert,
+  CalendarClock,
 } from 'lucide-react'
 import KpiCard from '@/components/dashboard/KpiCard'
 import MonthlyTrendChart from '@/components/dashboard/MonthlyTrendChart'
@@ -342,7 +343,11 @@ function MissingNotesModal({
             <div>
               <h2 className="text-base font-bold text-gray-900">Notas Ausentes</h2>
               <p className="text-xs text-gray-500">
-                Competência: {formatCompetencia(competencia)} · {groups.reduce((s, g) => s + g.count, 0)} número(s) faltando
+                Competência: {formatCompetencia(competencia)} ·{' '}
+                <span className="text-red-600 font-semibold">{groups.reduce((s, g) => s + (g.absent?.length ?? g.count), 0)} ausente(s) de fato</span>
+                {groups.some(g => g.countOtherPeriod > 0) && (
+                  <span className="text-amber-600 font-semibold"> · {groups.reduce((s, g) => s + (g.countOtherPeriod ?? 0), 0)} em outro período</span>
+                )}
               </p>
             </div>
           </div>
@@ -381,9 +386,16 @@ function MissingNotesModal({
                       </span>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
-                      <span className="text-xs font-bold text-red-600 bg-red-100 px-2 py-0.5 rounded-full">
-                        {group.count} ausente{group.count > 1 ? 's' : ''}
-                      </span>
+                      {(group.absent ?? group.gaps).length > 0 && (
+                        <span className="text-xs font-bold text-red-600 bg-red-100 px-2 py-0.5 rounded-full">
+                          {(group.absent ?? group.gaps).length} ausente{(group.absent ?? group.gaps).length > 1 ? 's' : ''}
+                        </span>
+                      )}
+                      {(group.countOtherPeriod ?? 0) > 0 && (
+                        <span className="text-xs font-bold text-amber-600 bg-amber-100 px-2 py-0.5 rounded-full">
+                          {group.countOtherPeriod} outro período
+                        </span>
+                      )}
                       {isOpen
                         ? <ChevronDown className="h-4 w-4 text-gray-400" />
                         : <ChevronRight className="h-4 w-4 text-gray-400" />
@@ -393,25 +405,62 @@ function MissingNotesModal({
 
                   {/* Gap numbers */}
                   {isOpen && (
-                    <div className="px-4 py-3">
-                      <p className="text-[11px] text-gray-400 mb-2 font-medium uppercase tracking-wide">
-                        Números faltando:
-                      </p>
-                      <div className="flex flex-wrap gap-1.5">
-                        {group.gaps.map((n) => (
-                          <span
-                            key={n}
-                            className="inline-flex items-center px-2.5 py-1 rounded-md bg-red-50 border border-red-200 text-red-700 text-xs font-mono font-semibold"
-                          >
-                            {n}
-                          </span>
-                        ))}
-                      </div>
-                      {group.gaps.length > 50 && (
-                        <p className="text-xs text-gray-400 mt-2">
-                          Mostrando todos os {group.gaps.length} números ausentes
-                        </p>
+                    <div className="px-4 py-3 space-y-3">
+                      {/* Ausentes de fato */}
+                      {(group.absent ?? group.gaps).length > 0 && (
+                        <div>
+                          <p className="text-[11px] text-red-500 mb-1.5 font-semibold uppercase tracking-wide flex items-center gap-1">
+                            <ListX className="h-3 w-3" /> Ausentes de fato ({(group.absent ?? group.gaps).length})
+                          </p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {(group.absent ?? group.gaps).map((n) => (
+                              <span
+                                key={n}
+                                className="inline-flex items-center px-2.5 py-1 rounded-md bg-red-50 border border-red-200 text-red-700 text-xs font-mono font-semibold"
+                              >
+                                {n}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
                       )}
+
+                      {/* Em outro período */}
+                      {(group.inOtherPeriod ?? []).length > 0 && (() => {
+                        const byComp = new Map<string, number[]>()
+                        for (const entry of group.inOtherPeriod) {
+                          const arr = byComp.get(entry.competencia) ?? []
+                          arr.push(entry.num)
+                          byComp.set(entry.competencia, arr)
+                        }
+                        return (
+                          <div>
+                            <p className="text-[11px] text-amber-600 mb-1.5 font-semibold uppercase tracking-wide flex items-center gap-1">
+                              <CalendarClock className="h-3 w-3" /> Em outro período ({group.inOtherPeriod.length}) — não estão faltando
+                            </p>
+                            {[...byComp.entries()].map(([comp, nums]) => (
+                              <div key={comp} className="mb-1.5">
+                                <p className="text-[10px] text-amber-500 mb-1 font-medium">
+                                  {formatCompetencia(comp)} ({nums.length} nota{nums.length > 1 ? 's' : ''})
+                                </p>
+                                <div className="flex flex-wrap gap-1">
+                                  {nums.slice(0, 60).map((n) => (
+                                    <span
+                                      key={n}
+                                      className="inline-flex items-center px-2 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-mono"
+                                    >
+                                      {n}
+                                    </span>
+                                  ))}
+                                  {nums.length > 60 && (
+                                    <span className="text-[10px] text-amber-500 self-center">+{nums.length - 60} mais</span>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )
+                      })()}
                     </div>
                   )}
                 </div>
@@ -423,7 +472,8 @@ function MissingNotesModal({
         {/* Footer */}
         <div className="px-6 py-3 border-t border-gray-100 bg-gray-50 rounded-b-2xl">
           <p className="text-xs text-gray-400">
-            💡 Notas ausentes podem indicar XMLs não importados, cancelamentos sem evento ou falhas no envio.
+            🔴 <strong>Ausentes de fato:</strong> número não existe em nenhum período — XML não importado ou falha no envio. &nbsp;
+            🟡 <strong>Em outro período:</strong> nota existe em outra competência (normal quando uma nota sem protocolo é autorizada num mês seguinte).
           </p>
         </div>
       </div>

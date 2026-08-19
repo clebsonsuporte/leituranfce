@@ -5,6 +5,7 @@ import { generateExcel } from '../services/reports/excelService.js'
 import {
   generateEntradasSaidasReport,
   generatePisCofinsItemsReport,
+  generateNfceCsosnReport,
 } from '../services/reports/itemsReportService.js'
 import { exportXmlZip } from '../services/reports/xmlExportService.js'
 
@@ -34,11 +35,12 @@ const reportsRoutes: FastifyPluginAsync = async (fastify) => {
       competencia?: string
       tpNF?: number
       status?: string
+      mod?: number
     }
 
-    const { type = 'sintetico', format: fmt = 'pdf', companyId, competencia, tpNF, status } = body
+    const { type = 'sintetico', format: fmt = 'pdf', companyId, competencia, tpNF, status, mod } = body
 
-    const filters = { companyId, competencia, tpNF, status }
+    const filters = { companyId, competencia, tpNF, status, mod }
 
     // Generate the report
     let buffer: Buffer
@@ -48,7 +50,7 @@ const reportsRoutes: FastifyPluginAsync = async (fastify) => {
     const timestamp = new Date().toISOString().slice(0, 10)
 
     // Determine if it's an items-level report (new types)
-    const itemsReportTypes = ['entradas-saidas', 'monofasico-5102', 'monofasico-5405', 'st']
+    const itemsReportTypes = ['entradas-saidas', 'monofasico-5102', 'monofasico-5405', 'st', 'nfce-csosn']
     const isItemsReport = itemsReportTypes.includes(type)
 
     try {
@@ -64,16 +66,20 @@ const reportsRoutes: FastifyPluginAsync = async (fastify) => {
           'monofasico-5405': ['5405', '6404'],
           'st': [],
           'entradas-saidas': [],
+          'nfce-csosn': [],
         }
         const tributacaoMap: Record<string, string> = {
           'monofasico-5102': 'monofasico',
           'monofasico-5405': 'monofasico',
           'st': 'st',
           'entradas-saidas': 'todos',
+          'nfce-csosn': 'todos',
         }
 
         if (fmt === 'pdf') {
-          if (type === 'entradas-saidas') {
+          if (type === 'nfce-csosn') {
+            buffer = await generateNfceCsosnReport(filters)
+          } else if (type === 'entradas-saidas') {
             buffer = await generateEntradasSaidasReport(filters)
           } else {
             buffer = await generatePisCofinsItemsReport(filters, tributacaoMap[type], cfopMap[type])
@@ -82,7 +88,11 @@ const reportsRoutes: FastifyPluginAsync = async (fastify) => {
           filename = `${type}-${timestamp}.pdf`
         } else {
           // CSV for items reports
-          buffer = await generateItemsCsv(filters, tributacaoMap[type], cfopMap[type], type)
+          if (type === 'nfce-csosn') {
+            buffer = await generateNfceCsosnCsv(filters)
+          } else {
+            buffer = await generateItemsCsv(filters, tributacaoMap[type], cfopMap[type], type)
+          }
           contentType = 'text/csv; charset=utf-8'
           filename = `${type}-${timestamp}.csv`
         }
@@ -293,6 +303,46 @@ async function generateItemsCsv(
     i.csosnIcms || '',
     i.cstPis || '',
     i.cstCofins || '',
+  ])
+
+  const csv = [headers.join(';'), ...rows.map(r => r.join(';'))].join('\n')
+  return Buffer.from('﻿' + csv, 'utf-8')
+}
+
+async function generateNfceCsosnCsv(filters: { companyId?: string; competencia?: string }): Promise<Buffer> {
+  const { default: prisma } = await import('../lib/prisma.js')
+
+  const whereNfe: Record<string, unknown> = { mod: 65, tpNF: 1 }
+  if (filters.companyId) whereNfe.companyId = filters.companyId
+  if (filters.competencia) whereNfe.competencia = filters.competencia
+
+  const items = await prisma.nfeItem.findMany({
+    where: { nfe: whereNfe },
+    include: { nfe: { select: { nNF: true, dhEmi: true, serie: true } } },
+    orderBy: [{ nfe: { dhEmi: 'asc' } }, { nfe: { nNF: 'asc' } }, { nItem: 'asc' }],
+    take: 100000,
+  })
+
+  const headers = ['Nº NF', 'Série', 'Data Emissão', 'Cód.', 'Produto', 'Qtd', 'V.Unitário', 'V.Total', 'CFOP', 'CSOSN', 'CST ICMS', 'CST PIS', 'CST COFINS', 'V.ICMS', 'V.ST', 'V.PIS', 'V.COFINS']
+
+  const rows = items.map(i => [
+    i.nfe.nNF,
+    i.nfe.serie,
+    new Date(i.nfe.dhEmi).toLocaleDateString('pt-BR'),
+    i.cProd || '',
+    `"${(i.xProd || '').replace(/"/g, '""')}"`,
+    Number(i.qCom).toFixed(3).replace('.', ','),
+    Number(i.vUnCom).toFixed(2).replace('.', ','),
+    Number(i.vProd).toFixed(2).replace('.', ','),
+    i.cfop || '',
+    i.csosnIcms || '',
+    i.cstIcms || '',
+    i.cstPis || '',
+    i.cstCofins || '',
+    Number(i.vICMS || 0).toFixed(2).replace('.', ','),
+    Number(i.vST || 0).toFixed(2).replace('.', ','),
+    Number(i.vPIS || 0).toFixed(2).replace('.', ','),
+    Number(i.vCOFINS || 0).toFixed(2).replace('.', ','),
   ])
 
   const csv = [headers.join(';'), ...rows.map(r => r.join(';'))].join('\n')

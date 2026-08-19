@@ -256,53 +256,93 @@ const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
   })
 
   // GET /dashboard/missing-notes
+  // Cross-month aware: busca a sequência global (todos os períodos) e classifica
+  // cada lacuna como "ausente de fato" (não existe em nenhum mês) ou
+  // "em outro período" (existe, mas numa competência diferente do filtro).
   fastify.get('/missing-notes', { preHandler: [fastify.authenticate] }, async (request, reply) => {
     const query = request.query as { companyId?: string; competencia?: string }
 
-    // Cancelada/Denegada/Inutilizada não são "lacuna" — o número foi usado e
-    // tem um registro explicando o que aconteceu com ele. Só SEM_PROTOCOLO
-    // (sem confirmação nenhuma da SEFAZ) conta como número sem explicação.
-    const where: Record<string, unknown> = { status: { not: 'SEM_PROTOCOLO' } }
-    if (query.companyId) where.companyId = query.companyId
-    if (query.competencia) where.competencia = query.competencia
+    // Busca TODAS as notas da empresa (sem filtro de competência) para poder
+    // comparar a sequência entre meses. SEM_PROTOCOLO continua excluído — o
+    // número foi usado pelo emitente mas não confirmado pela SEFAZ.
+    const whereAll: Record<string, unknown> = { status: { not: 'SEM_PROTOCOLO' } }
+    if (query.companyId) whereAll.companyId = query.companyId
 
-    const nfes = await prisma.nfe.findMany({
-      where,
-      select: { nNF: true, serie: true, mod: true, companyId: true, company: { select: { name: true } } },
+    const allNfes = await prisma.nfe.findMany({
+      where: whereAll,
+      select: { nNF: true, serie: true, mod: true, companyId: true, competencia: true, company: { select: { name: true } } },
       orderBy: { nNF: 'asc' },
     })
 
-    // Group by companyId + mod + serie
-    const groups = new Map<string, { companyId: string; companyName: string; mod: number; serie: string; nums: number[] }>()
-    for (const nfe of nfes) {
+    // Group by companyId+mod+serie; cada número mapeia para sua competência.
+    const globalGroups = new Map<string, {
+      companyId: string; companyName: string; mod: number; serie: string
+      numToComp: Map<number, string>
+    }>()
+    for (const nfe of allNfes) {
       const key = `${nfe.companyId}|${nfe.mod}|${nfe.serie}`
-      if (!groups.has(key)) {
-        groups.set(key, {
+      if (!globalGroups.has(key)) {
+        globalGroups.set(key, {
           companyId: nfe.companyId,
           companyName: nfe.company?.name ?? nfe.companyId,
           mod: nfe.mod,
           serie: nfe.serie ?? '',
-          nums: [],
+          numToComp: new Map(),
         })
       }
       const n = parseInt(nfe.nNF, 10)
-      if (!isNaN(n)) groups.get(key)!.nums.push(n)
+      if (!isNaN(n)) globalGroups.get(key)!.numToComp.set(n, nfe.competencia)
     }
 
-    const result: Array<{ companyId: string; companyName: string; mod: number; serie: string; gaps: number[]; count: number }> = []
+    type OtherPeriodEntry = { num: number; competencia: string }
+    const result: Array<{
+      companyId: string; companyName: string; mod: number; serie: string
+      gaps: number[]; count: number
+      absent: number[]; inOtherPeriod: OtherPeriodEntry[]; countOtherPeriod: number
+    }> = []
 
-    for (const g of groups.values()) {
-      g.nums.sort((a, b) => a - b)
-      const gaps: number[] = []
-      for (let i = 1; i < g.nums.length; i++) {
-        if (g.nums[i] - g.nums[i - 1] > 1) {
-          for (let x = g.nums[i - 1] + 1; x < g.nums[i]; x++) {
-            gaps.push(x)
-          }
+    for (const g of globalGroups.values()) {
+      const allNums = [...g.numToComp.keys()].sort((a, b) => a - b)
+      if (allNums.length < 2) continue
+
+      let rangeMin: number, rangeMax: number
+
+      if (query.competencia) {
+        // Restringe a análise ao intervalo de números da competência pedida.
+        // Lacunas fora desse intervalo não são problema desta competência.
+        const compNums = allNums.filter(n => g.numToComp.get(n) === query.competencia)
+        if (compNums.length < 2) continue
+        rangeMin = compNums[0]
+        rangeMax = compNums[compNums.length - 1]
+      } else {
+        rangeMin = allNums[0]
+        rangeMax = allNums[allNums.length - 1]
+      }
+
+      const absent: number[] = []
+      const inOtherPeriod: OtherPeriodEntry[] = []
+
+      for (let n = rangeMin + 1; n < rangeMax; n++) {
+        if (!g.numToComp.has(n)) {
+          absent.push(n)
+        } else if (query.competencia && g.numToComp.get(n) !== query.competencia) {
+          inOtherPeriod.push({ num: n, competencia: g.numToComp.get(n)! })
         }
       }
-      if (gaps.length > 0) {
-        result.push({ companyId: g.companyId, companyName: g.companyName, mod: g.mod, serie: g.serie, gaps, count: gaps.length })
+
+      const total = absent.length + inOtherPeriod.length
+      if (total > 0) {
+        result.push({
+          companyId: g.companyId,
+          companyName: g.companyName,
+          mod: g.mod,
+          serie: g.serie,
+          gaps: absent,        // compatibilidade com clientes antigos
+          count: absent.length,
+          absent,
+          inOtherPeriod,
+          countOtherPeriod: inOtherPeriod.length,
+        })
       }
     }
 

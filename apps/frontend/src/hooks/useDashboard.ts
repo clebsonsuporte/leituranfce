@@ -104,8 +104,11 @@ export interface MissingNotesGroup {
   companyName: string
   mod: number
   serie: string
-  gaps: number[]
-  count: number
+  gaps: number[]        // ausentes de fato (compatibilidade)
+  count: number         // apenas ausentes de fato
+  absent: number[]
+  inOtherPeriod: Array<{ num: number; competencia: string }>
+  countOtherPeriod: number
 }
 
 export function useMissingNotes() {

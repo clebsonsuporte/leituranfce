@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import {
   FileText, Download, Loader2, Table2, BarChart3, FileSpreadsheet, File,
-  ArrowDownUp, ShoppingBag, Tag, Package, FileArchive,
+  ArrowDownUp, ShoppingBag, Tag, Package, FileArchive, Receipt,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
@@ -26,6 +26,21 @@ const REPORT_GROUPS = [
         bg: 'bg-blue-50 border-blue-200',
         activeBg: 'border-blue-600 bg-blue-50',
         desc: 'Todos os documentos NF-e e NFC-e do período com totais de impostos',
+        formats: ['pdf', 'csv'],
+      },
+    ],
+  },
+  {
+    label: 'NFC-e (Modelo 65)',
+    types: [
+      {
+        value: 'nfce-csosn',
+        label: 'NFC-e — CSOSN / CFOP',
+        icon: Receipt,
+        color: 'text-green-700',
+        bg: 'bg-green-50 border-green-200',
+        activeBg: 'border-green-600 bg-green-50',
+        desc: 'Itens de NFC-e (mod. 65) agrupados por CFOP e CSOSN, com consolidado tributário e percentuais',
         formats: ['pdf', 'csv'],
       },
     ],
@@ -122,6 +137,7 @@ export default function ReportsPage() {
   const [reportType, setReportType] = useState('entradas-saidas')
   const [format, setFormat] = useState('pdf')
   const [competencia, setCompetencia] = useState(useFilterStore.getState().selectedCompetencia || '_all')
+  const [mod, setMod] = useState<string>('_all')
   const [isGenerating, setIsGenerating] = useState(false)
 
   const { data: companies = [] } = useCompanies()
@@ -146,6 +162,7 @@ export default function ReportsPage() {
         format,
         companyId: selectedCompanyId || undefined,
         competencia: competencia === '_all' ? undefined : competencia,
+        mod: mod === '_all' ? undefined : Number(mod),
       })
 
       const response = await api.get(data.downloadUrl, { responseType: 'blob' })
@@ -304,6 +321,21 @@ export default function ReportsPage() {
                   </div>
                   <p className="text-xs text-gray-400 mt-1">Altere no filtro global do cabeçalho</p>
                 </div>
+                {reportType === 'entradas-saidas' && (
+                  <div>
+                    <label className="text-sm font-medium text-gray-700 block mb-1">Modelo do Documento</label>
+                    <Select value={mod} onValueChange={setMod}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="_all">NF-e + NFC-e (todos)</SelectItem>
+                        <SelectItem value="55">Apenas NF-e (modelo 55)</SelectItem>
+                        <SelectItem value="65">Apenas NFC-e (modelo 65)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -342,6 +374,20 @@ export default function ReportsPage() {
                     {competencia && competencia !== '_all' ? formatCompetencia(competencia) : 'Todas'}
                   </span>
                 </div>
+                {reportType === 'entradas-saidas' && (
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Modelo:</span>
+                    <span className="font-medium">
+                      {mod === '55' ? 'NF-e (mod. 55)' : mod === '65' ? 'NFC-e (mod. 65)' : 'Todos'}
+                    </span>
+                  </div>
+                )}
+                {reportType === 'nfce-csosn' && (
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Modelo:</span>
+                    <span className="font-semibold text-green-700">NFC-e (mod. 65)</span>
+                  </div>
+                )}
               </div>
 
               <div className="pt-3 border-t border-gray-100">
