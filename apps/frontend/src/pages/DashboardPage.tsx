@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import {
   FileText, ArrowDownCircle, ArrowUpCircle, XCircle, ShoppingCart, DollarSign,
   Receipt, TrendingUp, AlertTriangle, ListX, X, ChevronDown, ChevronRight, ShieldAlert,
-  CalendarClock,
+  CalendarClock, ExternalLink,
 } from 'lucide-react'
 import KpiCard from '@/components/dashboard/KpiCard'
 import MonthlyTrendChart from '@/components/dashboard/MonthlyTrendChart'
@@ -535,6 +535,45 @@ function SemProtocoloCard({
 
 // ─── Sem Protocolo Modal ───────────────────────────────────────────────────────
 
+const nfceUrls: Record<string, string> = {
+  '12': 'https://nfce.sefaz.ac.gov.br/nfce/portal.do?tipoConsulta=consultaChaveAcesso&chaveAcesso=',
+  '27': 'https://nfce.sefaz.al.gov.br/QRCode/consultarNFCe.jsp?chNFe=',
+  '16': 'https://www.sefaz.ap.gov.br/nfce/nfcec.php?chave=',
+  '13': 'https://sistemas.sefaz.am.gov.br/nfceweb/consultarNFCe.html?chNFe=',
+  '29': 'https://nfe.sefaz.ba.gov.br/servicos/nfce/default.aspx?chNFe=',
+  '23': 'https://nfce.sefaz.ce.gov.br/pages/showNFCe.html?chNFe=',
+  '53': 'https://dec.fazenda.df.gov.br/ConsultarNFCe.aspx?chNFe=',
+  '32': 'https://nfce.sefaz.es.gov.br/ConsultaNFCe/qrcode?chNFe=',
+  '52': 'https://nfce.sefaz.go.gov.br/showNFCe.html?chNFe=',
+  '21': 'https://nfce.sefaz.ma.gov.br/portal/consultarNFCe.jsp?chNFe=',
+  '51': 'https://nfce.sefaz.mt.gov.br/nfce/consultarNFCe?chNFe=',
+  '50': 'https://www.dfe.ms.gov.br/nfce/consulta?chNFe=',
+  '31': 'https://nfce.fazenda.mg.gov.br/portalnfce/sistema/qrcode.xhtml?p=',
+  '15': 'https://appnfc.sefa.pa.gov.br/portal/view/consultas/nfce/consultaNFCe.seam?chNFe=',
+  '25': 'https://nfce.sefaz.pb.gov.br/nfce/consulta?chNFe=',
+  '26': 'https://nfce.sefaz.pe.gov.br/nfce/consulta?p=',
+  '22': 'https://nfce.sefaz.pi.gov.br/nfce/consulta?chNFe=',
+  '33': 'https://nfce.fazenda.rj.gov.br/consulta?chNFe=',
+  '24': 'https://nfce.sefaz.rn.gov.br/consultarNFCe?chNFe=',
+  '43': 'https://www.sefaz.rs.gov.br/NFCE/NFCE-COM.aspx?chNFe=',
+  '11': 'https://nfce.sefin.ro.gov.br/nfce/consulta?chNFe=',
+  '14': 'https://nfce.sefaz.rr.gov.br/nfce/consulta?chNFe=',
+  '42': 'https://sat.sef.sc.gov.br/nfce/consulta?chNFe=',
+  '35': 'https://www.nfce.fazenda.sp.gov.br/NFCeConsultaPublica/Paginas/ConsultaPublica.aspx?chNFe=',
+  '28': 'https://nfce.sefaz.se.gov.br/nfce/consulta?chNFe=',
+  '17': 'https://nfce.sefaz.to.gov.br/nfce/consulta?chNFe=',
+}
+
+function getConsultaUrl(mod: number, chNFe: string): string {
+  if (mod === 55) {
+    return `https://www.nfe.fazenda.gov.br/portal/consultaRecaptcha.aspx?tipoConsulta=completa&tipoConteudo=XmlAValidar&nfe.chNFe=${chNFe}`
+  }
+  const cUF = chNFe.substring(0, 2)
+  const base = nfceUrls[cUF]
+  if (base) return `${base}${chNFe}`
+  return `https://www.nfe.fazenda.gov.br/portal/consultaRecaptcha.aspx?tipoConsulta=completa&tipoConteudo=XmlAValidar&nfe.chNFe=${chNFe}`
+}
+
 function SemProtocoloModal({
   groups,
   competencia,
@@ -602,7 +641,18 @@ function SemProtocoloModal({
                         </p>
                         <p className="text-[11px] text-gray-400 font-mono truncate">{formatChNFe(n.chNFe)}</p>
                       </div>
-                      <span className="text-xs text-gray-400 shrink-0">{formatDateTime(n.dhEmi)}</span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-xs text-gray-400">{formatDateTime(n.dhEmi)}</span>
+                        <a
+                          href={getConsultaUrl(n.mod, n.chNFe)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="Consultar situação no portal SEFAZ"
+                          className="h-7 w-7 rounded-md flex items-center justify-center text-primary-600 hover:bg-primary-50 hover:text-primary-700 transition-colors"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -612,9 +662,10 @@ function SemProtocoloModal({
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-3 border-t border-gray-100 bg-gray-50 rounded-b-2xl">
-          <p className="text-xs text-gray-400">
-            💡 O XML importado é só o documento assinado pelo emitente, sem o protocolo de autorização da SEFAZ (sem cStat/nProt). Procure o arquivo correto (nfeProc/procNFe) ou confira a situação direto no site da SEFAZ.
+        <div className="px-6 py-3 border-t border-gray-100 bg-gray-50 rounded-b-2xl space-y-1">
+          <p className="text-xs text-gray-500 font-medium">O que significa isso?</p>
+          <p className="text-xs text-gray-400 leading-relaxed">
+            O XML importado é o documento assinado pelo emitente, mas sem o retorno de autorização da SEFAZ (wrapper <code className="bg-gray-100 px-1 rounded">nfeProc</code> com cStat/nProt). A nota pode estar autorizada — clique em <ExternalLink className="inline h-3 w-3 mb-0.5" /> para verificar a situação real no portal SEFAZ. Se estiver autorizada, exporte o XML completo (com protocolo) do sistema emissor ou do portal e reimporte.
           </p>
         </div>
       </div>
