@@ -2,6 +2,7 @@ import { useState } from 'react'
 import {
   FileText, Download, Loader2, Table2, BarChart3, FileSpreadsheet, File,
   ArrowDownUp, ShoppingBag, Tag, Package, FileArchive, Receipt,
+  ArrowDownCircle, ArrowUpCircle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
@@ -26,6 +27,26 @@ const REPORT_GROUPS = [
         bg: 'bg-blue-50 border-blue-200',
         activeBg: 'border-blue-600 bg-blue-50',
         desc: 'Todos os documentos NF-e e NFC-e do período com totais de impostos',
+        formats: ['pdf', 'csv'],
+      },
+      {
+        value: 'saidas',
+        label: 'Somente Saídas',
+        icon: ArrowUpCircle,
+        color: 'text-orange-700',
+        bg: 'bg-orange-50 border-orange-200',
+        activeBg: 'border-orange-600 bg-orange-50',
+        desc: 'Apenas documentos de saída (NF-e e NFC-e emitidas) com totais de impostos',
+        formats: ['pdf', 'csv'],
+      },
+      {
+        value: 'entradas',
+        label: 'Somente Entradas',
+        icon: ArrowDownCircle,
+        color: 'text-green-700',
+        bg: 'bg-green-50 border-green-200',
+        activeBg: 'border-green-600 bg-green-50',
+        desc: 'Apenas documentos de entrada (NF-e recebidas) com totais de impostos',
         formats: ['pdf', 'csv'],
       },
     ],
@@ -157,12 +178,19 @@ export default function ReportsPage() {
   async function handleGenerate() {
     setIsGenerating(true)
     try {
+      const tpNFMap: Record<string, number> = { saidas: 1, entradas: 0 }
+      const backendType = (reportType === 'saidas' || reportType === 'entradas')
+        ? 'entradas-saidas'
+        : reportType
+      const tpNF = tpNFMap[reportType]
+
       const { data } = await api.post('/reports/generate', {
-        type: reportType,
+        type: backendType,
         format,
         companyId: selectedCompanyId || undefined,
         competencia: competencia === '_all' ? undefined : competencia,
         mod: mod === '_all' ? undefined : Number(mod),
+        tpNF,
       })
 
       const response = await api.get(data.downloadUrl, { responseType: 'blob' })
@@ -321,7 +349,7 @@ export default function ReportsPage() {
                   </div>
                   <p className="text-xs text-gray-400 mt-1">Altere no filtro global do cabeçalho</p>
                 </div>
-                {reportType === 'entradas-saidas' && (
+                {['entradas-saidas', 'saidas', 'entradas'].includes(reportType) && (
                   <div>
                     <label className="text-sm font-medium text-gray-700 block mb-1">Modelo do Documento</label>
                     <Select value={mod} onValueChange={setMod}>
@@ -374,7 +402,7 @@ export default function ReportsPage() {
                     {competencia && competencia !== '_all' ? formatCompetencia(competencia) : 'Todas'}
                   </span>
                 </div>
-                {reportType === 'entradas-saidas' && (
+                {['entradas-saidas', 'saidas', 'entradas'].includes(reportType) && (
                   <div className="flex justify-between">
                     <span className="text-gray-500">Modelo:</span>
                     <span className="font-medium">
