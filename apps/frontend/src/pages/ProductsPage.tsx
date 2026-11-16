@@ -14,10 +14,12 @@ type NcmValidationResult = {
   status: 'compativel' | 'incompativel' | 'incerto'
   ncmDesc: string | null
   motivo: string | null
+  ncmSugerido: string | null
 }
 
 function NcmBadge({ result }: { result: NcmValidationResult | undefined }) {
   if (!result) return null
+  const sugestao = result.ncmSugerido ? `\n💡 NCM sugerido: ${result.ncmSugerido}` : ''
   if (result.status === 'compativel') {
     return (
       <span title={`${result.ncmDesc}\n✅ ${result.motivo}`} className="cursor-help">
@@ -27,14 +29,28 @@ function NcmBadge({ result }: { result: NcmValidationResult | undefined }) {
   }
   if (result.status === 'incompativel') {
     return (
-      <span title={`${result.ncmDesc}\n❌ ${result.motivo}`} className="cursor-help">
-        <XCircle className="h-3.5 w-3.5 text-red-500" />
+      <span className="cursor-help flex items-center gap-1">
+        <span title={`${result.ncmDesc}\n❌ ${result.motivo}${sugestao}`}>
+          <XCircle className="h-3.5 w-3.5 text-red-500" />
+        </span>
+        {result.ncmSugerido && (
+          <span className="text-xs text-blue-600 font-medium" title={`NCM sugerido para este produto`}>
+            → {result.ncmSugerido.slice(0, 30)}{result.ncmSugerido.length > 30 ? '…' : ''}
+          </span>
+        )}
       </span>
     )
   }
   return (
-    <span title={`${result.ncmDesc || 'NCM não encontrado'}\n⚠️ ${result.motivo}`} className="cursor-help">
-      <HelpCircle className="h-3.5 w-3.5 text-amber-400" />
+    <span className="cursor-help flex items-center gap-1">
+      <span title={`${result.ncmDesc || 'NCM não encontrado'}\n⚠️ ${result.motivo}${sugestao}`}>
+        <HelpCircle className="h-3.5 w-3.5 text-amber-400" />
+      </span>
+      {result.ncmSugerido && (
+        <span className="text-xs text-blue-600 font-medium" title={`NCM sugerido para este produto`}>
+          → {result.ncmSugerido.slice(0, 30)}{result.ncmSugerido.length > 30 ? '…' : ''}
+        </span>
+      )}
     </span>
   )
 }

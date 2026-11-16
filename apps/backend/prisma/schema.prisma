@@ -304,6 +304,7 @@ model NcmValidationCache {
   status      String   // "compativel" | "incompativel" | "incerto"
   ncmDesc     String?
   motivo      String?
+  ncmSugerido String?
   createdAt   DateTime @default(now())
 
   @@unique([xProd, ncm])

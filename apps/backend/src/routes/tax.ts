@@ -79,7 +79,7 @@ export default async function taxRoutes(app: FastifyInstance) {
       new Map(body.items.map(i => [`${i.xProd}||${i.ncm}`, i])).values()
     ).slice(0, 50) // limite por chamada
 
-    const results: Record<string, { status: string; ncmDesc: string | null; motivo: string | null }> = {}
+    const results: Record<string, { status: string; ncmDesc: string | null; motivo: string | null; ncmSugerido: string | null }> = {}
 
     for (const item of unique) {
       const key = `${item.xProd}||${item.ncm}`
@@ -95,7 +95,7 @@ export default async function taxRoutes(app: FastifyInstance) {
         where: { xProd_ncm: { xProd: item.xProd, ncm: ncmClean } },
       })
       if (cached) {
-        results[key] = { status: cached.status, ncmDesc: cached.ncmDesc, motivo: cached.motivo }
+        results[key] = { status: cached.status, ncmDesc: cached.ncmDesc, motivo: cached.motivo, ncmSugerido: cached.ncmSugerido ?? null }
         continue
       }
 
@@ -113,7 +113,7 @@ export default async function taxRoutes(app: FastifyInstance) {
       } catch { /* ignora timeout */ }
 
       if (!ncmDesc) {
-        const row = { status: 'incerto', ncmDesc: null, motivo: 'NCM não encontrado na tabela TIPI' }
+        const row = { status: 'incerto', ncmDesc: null, motivo: 'NCM não encontrado na tabela TIPI', ncmSugerido: null }
         results[key] = row
         await prisma.ncmValidationCache.create({ data: { xProd: item.xProd, ncm: ncmClean, ...row } })
         continue
@@ -122,31 +122,36 @@ export default async function taxRoutes(app: FastifyInstance) {
       // Chama Claude Haiku para comparação semântica
       let status = 'incerto'
       let motivo = ''
+      let ncmSugerido: string | null = null
       try {
         const msg = await anthropic.messages.create({
           model: 'claude-haiku-4-5-20251001',
-          max_tokens: 120,
+          max_tokens: 200,
           messages: [{
             role: 'user',
             content: `Produto fiscal: "${item.xProd}"
 NCM: ${ncmClean}
 Descrição oficial do NCM na tabela TIPI: "${ncmDesc}"
 
-O NCM é compatível com o produto? Responda APENAS em JSON: {"status":"compativel"|"incompativel"|"incerto","motivo":"uma frase curta"}`,
+O NCM é compatível com o produto? Responda APENAS em JSON:
+{"status":"compativel"|"incompativel"|"incerto","motivo":"uma frase curta","ncm_sugerido":"descrição do NCM correto ou null se compativel"}`,
           }],
         })
         const raw = (msg.content[0] as { text: string }).text.trim()
         const jsonMatch = raw.match(/\{.*\}/s)
         if (jsonMatch) {
-          const parsed = JSON.parse(jsonMatch[0]) as { status: string; motivo: string }
+          const parsed = JSON.parse(jsonMatch[0]) as { status: string; motivo: string; ncm_sugerido?: string | null }
           status = ['compativel', 'incompativel', 'incerto'].includes(parsed.status)
             ? parsed.status
             : 'incerto'
           motivo = parsed.motivo || ''
+          if (status !== 'compativel' && parsed.ncm_sugerido && parsed.ncm_sugerido !== 'null') {
+            ncmSugerido = parsed.ncm_sugerido
+          }
         }
       } catch { motivo = 'Erro ao consultar IA' }
 
-      const row = { status, ncmDesc, motivo }
+      const row = { status, ncmDesc, motivo, ncmSugerido }
       results[key] = row
       await prisma.ncmValidationCache.upsert({
         where: { xProd_ncm: { xProd: item.xProd, ncm: ncmClean } },
