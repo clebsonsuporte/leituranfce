@@ -130,10 +130,24 @@ async function start() {
     await prisma.$connect()
     app.log.info('Database connected')
 
-    // Garante coluna ncmSugerido no cache (migração segura)
+    // Migrações seguras de schema
     await prisma.$executeRawUnsafe(
       `ALTER TABLE ncm_validation_cache ADD COLUMN IF NOT EXISTS "ncmSugerido" TEXT`
-    ).catch(() => { /* ignora se tabela ainda não existe */ })
+    ).catch(() => {})
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS cfop_validation_cache (
+        id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        "xProd" TEXT NOT NULL,
+        ncm TEXT NOT NULL,
+        cfop TEXT NOT NULL,
+        "tpNF" INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        "cfopSugerido" TEXT,
+        motivo TEXT,
+        "createdAt" TIMESTAMP NOT NULL DEFAULT NOW(),
+        UNIQUE("xProd", ncm, cfop, "tpNF")
+      )
+    `).catch(() => {})
 
     // Auto-start folder watcher if previously configured
     await initWatcher()

@@ -237,6 +237,91 @@ O NCM é compatível com o produto? Responda APENAS em JSON:
     return reply.send(ufs)
   })
 
+  // POST /api/tax/cfop/validate-items — valida CFOP vs produto/NCM via IA
+  app.post('/cfop/validate-items', { preHandler: [app.authenticate] }, async (req, reply) => {
+    const body = req.body as { items: Array<{ xProd: string; ncm: string; cfop: string; tpNF: number; ncmDesc?: string }> }
+    if (!Array.isArray(body?.items) || body.items.length === 0) {
+      return reply.status(400).send({ error: 'items é obrigatório' })
+    }
+
+    const unique = Array.from(
+      new Map(body.items.map(i => [`${i.xProd}||${i.ncm}||${i.cfop}||${i.tpNF}`, i])).values()
+    ).slice(0, 50)
+
+    const results: Record<string, { status: string; cfopSugerido: string | null; motivo: string | null }> = {}
+
+    for (const item of unique) {
+      const key = `${item.xProd}||${item.ncm}||${item.cfop}||${item.tpNF}`
+
+      // Verifica cache
+      const cached = await prisma.cfopValidationCache.findUnique({
+        where: { xProd_ncm_cfop_tpNF: { xProd: item.xProd, ncm: item.ncm, cfop: item.cfop, tpNF: item.tpNF } },
+      })
+      if (cached) {
+        results[key] = { status: cached.status, cfopSugerido: cached.cfopSugerido, motivo: cached.motivo }
+        continue
+      }
+
+      // Busca descrição do NCM se não fornecida
+      let ncmDesc = item.ncmDesc ?? null
+      if (!ncmDesc && item.ncm) {
+        try {
+          const r = await fetch(`https://brasilapi.com.br/api/ncm/v1/${item.ncm.replace(/\D/g, '')}`,
+            { signal: AbortSignal.timeout(5000) })
+          if (r.ok) ncmDesc = ((await r.json()) as { descricao?: string }).descricao ?? null
+        } catch { /* ignora */ }
+      }
+
+      const operacao = item.tpNF === 0 ? 'Entrada (recebimento/compra de fornecedor)' : 'Saída (venda ao cliente)'
+      const cfopDesc = CFOP_DESC[item.cfop] ?? `CFOP ${item.cfop}`
+
+      let status = 'incerto'
+      let cfopSugerido: string | null = null
+      let motivo = ''
+
+      try {
+        const msg = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 200,
+          messages: [{
+            role: 'user',
+            content: `Você é um especialista em legislação tributária brasileira (NF-e/NFC-e).
+
+Produto fiscal: "${item.xProd}"
+NCM: ${item.ncm}${ncmDesc ? ` — ${ncmDesc}` : ''}
+CFOP atual: ${item.cfop} (${cfopDesc})
+Tipo de operação: ${operacao}
+
+O CFOP ${item.cfop} está correto para este produto e operação? Considere:
+- Se é entrada ou saída (1xxx/2xxx=entrada, 5xxx/6xxx=saída)
+- Se o CFOP corresponde à natureza do produto (mercadoria, serviço, ativo, etc.)
+- Se há um CFOP mais adequado
+
+Responda APENAS em JSON: {"status":"correto"|"incorreto"|"incerto","cfop_sugerido":"XXXX ou null","motivo":"frase curta explicando"}`,
+          }],
+        })
+        const raw = (msg.content[0] as { text: string }).text.trim()
+        const jsonMatch = raw.match(/\{.*\}/s)
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]) as { status: string; cfop_sugerido: string | null; motivo: string }
+          status = ['correto', 'incorreto', 'incerto'].includes(parsed.status) ? parsed.status : 'incerto'
+          cfopSugerido = (parsed.cfop_sugerido && parsed.cfop_sugerido !== 'null') ? parsed.cfop_sugerido : null
+          motivo = parsed.motivo ?? ''
+        }
+      } catch { motivo = 'Erro ao consultar IA' }
+
+      const row = { status, cfopSugerido, motivo }
+      results[key] = row
+      await prisma.cfopValidationCache.upsert({
+        where: { xProd_ncm_cfop_tpNF: { xProd: item.xProd, ncm: item.ncm, cfop: item.cfop, tpNF: item.tpNF } },
+        create: { xProd: item.xProd, ncm: item.ncm, cfop: item.cfop, tpNF: item.tpNF, ...row },
+        update: row,
+      })
+    }
+
+    return reply.send(results)
+  })
+
   // GET /api/tax/audit — auditoria tributária NCM + CFOP
   app.get('/audit', { preHandler: [app.authenticate] }, async (req, reply) => {
     const { companyId, competencia } = req.query as { companyId?: string; competencia?: string }
@@ -289,8 +374,9 @@ O NCM é compatível com o produto? Responda APENAS em JSON:
         : ncmStatus === 'compativel' && cfopStatus === 'ok' ? 'ok'
         : 'nao_validado'
 
+      const tpNF = r.saidaCount >= r.entradaCount ? 1 : 0
       return {
-        xProd: r.xProd, ncm: r.ncm, cfop: r.cfop,
+        xProd: r.xProd, ncm: r.ncm, cfop: r.cfop, tpNF,
         count: r.count, vTotal: r.vTotal,
         ncmStatus, ncmDesc: cache?.ncmDesc ?? null,
         ncmSugerido: cache?.ncmSugerido ?? null, motivo: cache?.motivo ?? null,

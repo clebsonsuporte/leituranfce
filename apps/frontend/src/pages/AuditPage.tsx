@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { Shield, AlertTriangle, XCircle, CheckCircle2, HelpCircle, Download, RefreshCw } from 'lucide-react'
+import { useQuery, useMutation } from '@tanstack/react-query'
+import { Shield, AlertTriangle, XCircle, CheckCircle2, HelpCircle, Download, RefreshCw, Loader2 } from 'lucide-react'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -9,10 +9,17 @@ import api from '@/lib/api'
 import { useFilterStore } from '@/stores/filterStore'
 import { formatCurrency } from '@/lib/utils'
 
+type CfopValidationResult = {
+  status: 'correto' | 'incorreto' | 'incerto'
+  cfopSugerido: string | null
+  motivo: string | null
+}
+
 type AuditItem = {
   xProd: string
   ncm: string | null
   cfop: string
+  tpNF: number
   count: number
   vTotal: number
   ncmStatus: 'compativel' | 'incompativel' | 'incerto' | null
@@ -77,6 +84,16 @@ export default function AuditPage() {
   if (selectedCompanyId) params.set('companyId', selectedCompanyId)
   if (selectedCompetencia) params.set('competencia', selectedCompetencia)
 
+  const [cfopValidations, setCfopValidations] = useState<Record<string, CfopValidationResult>>({})
+
+  const cfopMutation = useMutation({
+    mutationFn: async (items: Array<{ xProd: string; ncm: string; cfop: string; tpNF: number; ncmDesc?: string }>) => {
+      const { data } = await api.post('/tax/cfop/validate-items', { items })
+      return data as Record<string, CfopValidationResult>
+    },
+    onSuccess: (data) => setCfopValidations(prev => ({ ...prev, ...data })),
+  })
+
   const { data, isLoading, refetch, isFetching } = useQuery({
     queryKey: ['audit', selectedCompanyId, selectedCompetencia],
     queryFn: async () => {
@@ -134,6 +151,20 @@ export default function AuditPage() {
           >
             <RefreshCw className={`h-3.5 w-3.5 ${isFetching ? 'animate-spin' : ''}`} />
             Atualizar
+          </button>
+          <button
+            onClick={() => {
+              const toValidate = items
+                .filter(i => i.ncm && i.cfop)
+                .map(i => ({ xProd: i.xProd, ncm: i.ncm!, cfop: i.cfop, tpNF: i.tpNF, ncmDesc: i.ncmDesc ?? undefined }))
+              cfopMutation.mutate(toValidate)
+            }}
+            disabled={!data || cfopMutation.isPending || items.length === 0}
+            className="flex items-center gap-1.5 h-9 px-3 rounded-md border border-purple-300 bg-purple-50 text-purple-800 text-sm font-medium hover:bg-purple-100 disabled:opacity-50"
+          >
+            {cfopMutation.isPending
+              ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />Validando CFOP...</>
+              : '🧾 Validar CFOP com IA'}
           </button>
           <button
             onClick={exportCsv}
@@ -234,8 +265,7 @@ export default function AuditPage() {
               <TableHead>Produto</TableHead>
               <TableHead>NCM Atual</TableHead>
               <TableHead>NCM Sugerido</TableHead>
-              <TableHead>CFOP</TableHead>
-              <TableHead>Operação</TableHead>
+              <TableHead>CFOP + Análise IA</TableHead>
               <TableHead className="text-right">Valor Total</TableHead>
               <TableHead>Risco</TableHead>
             </TableRow>
@@ -252,7 +282,7 @@ export default function AuditPage() {
               : filtered.length === 0
                 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center py-12 text-gray-400">
+                    <TableCell colSpan={6} className="text-center py-12 text-gray-400">
                       {items.length === 0 ? 'Nenhum dado. Clique em Atualizar para carregar.' : 'Nenhum item neste filtro.'}
                     </TableCell>
                   </TableRow>
@@ -293,16 +323,33 @@ export default function AuditPage() {
                       )}
                     </TableCell>
                     <TableCell>
-                      <div className="flex items-center gap-1.5">
-                        <CfopStatusIcon status={item.cfopStatus} />
-                        <span className="text-xs font-mono">{item.cfop}</span>
-                      </div>
+                      {(() => {
+                        const cfopKey = `${item.xProd}||${item.ncm ?? ''}||${item.cfop}||${item.tpNF}`
+                        const cfopAi = cfopValidations[cfopKey]
+                        const icon = cfopAi
+                          ? cfopAi.status === 'correto' ? <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
+                            : cfopAi.status === 'incorreto' ? <XCircle className="h-4 w-4 text-red-500 shrink-0" />
+                            : <HelpCircle className="h-4 w-4 text-amber-400 shrink-0" />
+                          : <CfopStatusIcon status={item.cfopStatus} />
+                        return (
+                          <div className="flex flex-col gap-0.5">
+                            <div className="flex items-center gap-1.5">
+                              {icon}
+                              <span className="text-xs font-mono font-semibold">{item.cfop}</span>
+                            </div>
+                            <p className="text-xs text-gray-500 max-w-[160px] truncate" title={cfopAi?.motivo ?? item.cfopMotivo}>
+                              {cfopAi?.motivo ?? item.cfopMotivo}
+                            </p>
+                            {cfopAi?.cfopSugerido && (
+                              <span className="text-xs text-blue-700 font-medium">
+                                → Sugerido: {cfopAi.cfopSugerido}
+                              </span>
+                            )}
+                          </div>
+                        )
+                      })()}
                     </TableCell>
-                    <TableCell>
-                      <p className="text-xs text-gray-600 max-w-[180px] truncate" title={item.cfopMotivo}>
-                        {item.cfopMotivo}
-                      </p>
-                    </TableCell>
+                    <TableCell />
                     <TableCell className="text-right text-sm font-medium">
                       {formatCurrency(item.vTotal)}
                     </TableCell>

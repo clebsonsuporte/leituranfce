@@ -297,6 +297,21 @@ enum AlertSeverity {
   CRITICAL
 }
 
+model CfopValidationCache {
+  id           String   @id @default(cuid())
+  xProd        String
+  ncm          String
+  cfop         String
+  tpNF         Int
+  status       String   // "correto" | "incorreto" | "incerto"
+  cfopSugerido String?
+  motivo       String?
+  createdAt    DateTime @default(now())
+
+  @@unique([xProd, ncm, cfop, tpNF])
+  @@map("cfop_validation_cache")
+}
+
 model NcmValidationCache {
   id          String   @id @default(cuid())
   xProd       String
