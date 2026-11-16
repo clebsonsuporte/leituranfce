@@ -86,7 +86,7 @@ export default async function taxRoutes(app: FastifyInstance) {
       const ncmClean = item.ncm?.replace(/\D/g, '') || ''
 
       if (!ncmClean || ncmClean.length < 4) {
-        results[key] = { status: 'incerto', ncmDesc: null, motivo: 'NCM ausente ou muito curto' }
+        results[key] = { status: 'incerto', ncmDesc: null, motivo: 'NCM ausente ou muito curto', ncmSugerido: null }
         continue
       }
 
