@@ -1,10 +1,47 @@
 import { FastifyInstance } from 'fastify'
 import { calcularTributos, TaxConsultaInput } from '../services/tax/taxEngine.js'
 import Anthropic from '@anthropic-ai/sdk'
-import { PrismaClient } from '@prisma/client'
+import { PrismaClient, Prisma } from '@prisma/client'
 
 const prisma = new PrismaClient()
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+
+const CFOP_DESC: Record<string, string> = {
+  '1101': 'Compra p/ industrialização', '1102': 'Compra p/ comercialização',
+  '1116': 'Compra p/ industrialização (ST)', '1202': 'Devolução de venda',
+  '1411': 'Compra p/ ativo imobilizado', '1556': 'Compra p/ uso/consumo',
+  '2101': 'Compra interestadual p/ industrialização', '2102': 'Compra interestadual p/ comercialização',
+  '2202': 'Devolução de venda interestadual', '2411': 'Compra interestadual p/ ativo',
+  '5101': 'Venda de produção própria', '5102': 'Venda de mercadoria de terceiros',
+  '5103': 'Venda de produção (ST)', '5405': 'Venda com ICMS-ST',
+  '5933': 'Prestação de serviço', '5949': 'Outra saída',
+  '6101': 'Venda interestadual de produção', '6102': 'Venda interestadual de terceiros',
+  '6405': 'Venda interestadual com ICMS-ST', '6933': 'Serviço interestadual',
+}
+
+function auditCfop(cfop: string, entradaCount: number, saidaCount: number) {
+  const first = parseInt(cfop[0] ?? '0')
+  const desc = CFOP_DESC[cfop] ?? `CFOP ${cfop}`
+  const isEntrada = [1, 2, 3].includes(first)
+  const isSaida = [5, 6, 7].includes(first)
+
+  if (isEntrada && saidaCount > 0 && entradaCount === 0) {
+    return { cfopStatus: 'erro' as const, cfopMotivo: `${desc} — CFOP de entrada usado em nota de saída` }
+  }
+  if (isSaida && entradaCount > 0 && saidaCount === 0) {
+    return { cfopStatus: 'erro' as const, cfopMotivo: `${desc} — CFOP de saída usado em nota de entrada` }
+  }
+  if (first === 6) {
+    return { cfopStatus: 'atencao' as const, cfopMotivo: `${desc} — Operação interestadual: verifique UF destino` }
+  }
+  if (first === 2) {
+    return { cfopStatus: 'atencao' as const, cfopMotivo: `${desc} — Compra interestadual: verifique UF fornecedor` }
+  }
+  if (!isEntrada && !isSaida) {
+    return { cfopStatus: 'erro' as const, cfopMotivo: `CFOP ${cfop} inválido` }
+  }
+  return { cfopStatus: 'ok' as const, cfopMotivo: desc }
+}
 
 export default async function taxRoutes(app: FastifyInstance) {
 
@@ -198,6 +235,83 @@ O NCM é compatível com o produto? Responda APENAS em JSON:
       { uf: 'TO', nome: 'Tocantins' },
     ]
     return reply.send(ufs)
+  })
+
+  // GET /api/tax/audit — auditoria tributária NCM + CFOP
+  app.get('/audit', { preHandler: [app.authenticate] }, async (req, reply) => {
+    const { companyId, competencia } = req.query as { companyId?: string; competencia?: string }
+
+    type RawItem = {
+      xProd: string
+      ncm: string | null
+      cfop: string
+      count: number
+      vTotal: number
+      entradaCount: number
+      saidaCount: number
+    }
+
+    const filters: Prisma.Sql[] = [Prisma.sql`n.status != 'CANCELADA'`]
+    if (companyId) filters.push(Prisma.sql`n."companyId" = ${companyId}`)
+    if (competencia) filters.push(Prisma.sql`n.competencia = ${competencia}`)
+    const whereClause = Prisma.join(filters, ' AND ')
+
+    const raw = await prisma.$queryRaw<RawItem[]>`
+      SELECT
+        ni."xProd",
+        ni.ncm,
+        ni.cfop,
+        COUNT(*)::int AS count,
+        COALESCE(SUM(ni."vProd")::float, 0) AS "vTotal",
+        SUM(CASE WHEN n."tpNF" = 0 THEN 1 ELSE 0 END)::int AS "entradaCount",
+        SUM(CASE WHEN n."tpNF" = 1 THEN 1 ELSE 0 END)::int AS "saidaCount"
+      FROM nfe_items ni
+      JOIN nfes n ON n.id = ni."nfeId"
+      WHERE ${whereClause}
+      GROUP BY ni."xProd", ni.ncm, ni.cfop
+      ORDER BY "vTotal" DESC
+      LIMIT 300
+    `
+
+    // Busca cache NCM para todos os pares únicos
+    const pairs = [...new Map(raw.map(r => [`${r.xProd}||${r.ncm ?? ''}`, { xProd: r.xProd, ncm: r.ncm ?? '' }])).values()]
+    const caches = pairs.length > 0
+      ? await prisma.ncmValidationCache.findMany({ where: { OR: pairs } })
+      : []
+    const cacheMap = new Map(caches.map(c => [`${c.xProd}||${c.ncm}`, c]))
+
+    const items = raw.map(r => {
+      const cache = cacheMap.get(`${r.xProd}||${r.ncm ?? ''}`)
+      const { cfopStatus, cfopMotivo } = auditCfop(r.cfop, r.entradaCount, r.saidaCount)
+      const ncmStatus = cache?.status ?? null
+      const risco = ncmStatus === 'incompativel' || cfopStatus === 'erro' ? 'alto'
+        : ncmStatus === 'incerto' || cfopStatus === 'atencao' ? 'medio'
+        : ncmStatus === 'compativel' && cfopStatus === 'ok' ? 'ok'
+        : 'nao_validado'
+
+      return {
+        xProd: r.xProd, ncm: r.ncm, cfop: r.cfop,
+        count: r.count, vTotal: r.vTotal,
+        ncmStatus, ncmDesc: cache?.ncmDesc ?? null,
+        ncmSugerido: cache?.ncmSugerido ?? null, motivo: cache?.motivo ?? null,
+        cfopStatus, cfopMotivo, risco,
+      }
+    })
+
+    const summary = {
+      total: items.length,
+      alto: items.filter(i => i.risco === 'alto').length,
+      medio: items.filter(i => i.risco === 'medio').length,
+      ok: items.filter(i => i.risco === 'ok').length,
+      naoValidado: items.filter(i => i.risco === 'nao_validado').length,
+      ncmIncompativel: items.filter(i => i.ncmStatus === 'incompativel').length,
+      ncmIncerto: items.filter(i => i.ncmStatus === 'incerto').length,
+      ncmCompativel: items.filter(i => i.ncmStatus === 'compativel').length,
+      cfopErro: items.filter(i => i.cfopStatus === 'erro').length,
+      cfopAtencao: items.filter(i => i.cfopStatus === 'atencao').length,
+    }
+
+    return reply.send({ items, summary })
   })
 
   // GET /api/tax/reforma — dados da reforma tributária

@@ -13,6 +13,7 @@ import UsersPage from './pages/UsersPage'
 import SegregacaoPage from './pages/SegregacaoPage'
 import EmailPage from './pages/EmailPage'
 import TaxPage from './pages/TaxPage'
+import AuditPage from './pages/AuditPage'
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { accessToken } = useAuthStore()
@@ -45,6 +46,7 @@ export default function App() {
         <Route path="alerts" element={<AlertsPage />} />
         <Route path="segregacao" element={<SegregacaoPage />} />
         <Route path="tax" element={<TaxPage />} />
+        <Route path="audit" element={<AuditPage />} />
         <Route path="settings/users" element={<UsersPage />} />
       </Route>
 

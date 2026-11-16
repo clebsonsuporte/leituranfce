@@ -13,6 +13,7 @@ import {
   Calculator,
   Mail,
   Receipt,
+  ShieldAlert,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
@@ -40,6 +41,7 @@ export default function Sidebar() {
     { label: 'E-mail Fiscal', path: '/email', icon: <Mail className="h-4 w-4" /> },
     { label: 'Segregação PGDAS-D', path: '/segregacao', icon: <Calculator className="h-4 w-4" /> },
     { label: 'Consulta Tributária', path: '/tax', icon: <Receipt className="h-4 w-4" /> },
+    { label: 'Auditoria Tributária', path: '/audit', icon: <ShieldAlert className="h-4 w-4" /> },
     {
       label: 'Alertas',
       path: '/alerts',
