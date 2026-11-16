@@ -95,8 +95,11 @@ export default async function taxRoutes(app: FastifyInstance) {
         where: { xProd_ncm: { xProd: item.xProd, ncm: ncmClean } },
       })
       if (cached) {
-        results[key] = { status: cached.status, ncmDesc: cached.ncmDesc, motivo: cached.motivo, ncmSugerido: cached.ncmSugerido ?? null }
-        continue
+        // Re-valida se não tem sugestão e não é compatível (cache antigo sem ncmSugerido)
+        if (cached.ncmSugerido !== null || cached.status === 'compativel') {
+          results[key] = { status: cached.status, ncmDesc: cached.ncmDesc, motivo: cached.motivo, ncmSugerido: cached.ncmSugerido ?? null }
+          continue
+        }
       }
 
       // Busca descrição do NCM na BrasilAPI
