@@ -87,8 +87,8 @@ export default function AuditPage() {
   const [cfopValidations, setCfopValidations] = useState<Record<string, CfopValidationResult>>({})
 
   const cfopMutation = useMutation({
-    mutationFn: async (items: Array<{ xProd: string; ncm: string; cfop: string; tpNF: number; ncmDesc?: string }>) => {
-      const { data } = await api.post('/tax/cfop/validate-items', { items })
+    mutationFn: async ({ items, forceRevalidate }: { items: Array<{ xProd: string; ncm: string; cfop: string; tpNF: number; ncmDesc?: string }>; forceRevalidate?: boolean }) => {
+      const { data } = await api.post('/tax/cfop/validate-items', { items, forceRevalidate })
       return data as Record<string, CfopValidationResult>
     },
     onSuccess: (data) => setCfopValidations(prev => ({ ...prev, ...data })),
@@ -157,7 +157,7 @@ export default function AuditPage() {
               const toValidate = items
                 .filter(i => i.ncm && i.cfop)
                 .map(i => ({ xProd: i.xProd, ncm: i.ncm!, cfop: i.cfop, tpNF: i.tpNF, ncmDesc: i.ncmDesc ?? undefined }))
-              cfopMutation.mutate(toValidate)
+              cfopMutation.mutate({ items: toValidate })
             }}
             disabled={!data || cfopMutation.isPending || items.length === 0}
             className="flex items-center gap-1.5 h-9 px-3 rounded-md border border-purple-300 bg-purple-50 text-purple-800 text-sm font-medium hover:bg-purple-100 disabled:opacity-50"
@@ -165,6 +165,20 @@ export default function AuditPage() {
             {cfopMutation.isPending
               ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />Validando CFOP...</>
               : '🧾 Validar CFOP com IA'}
+          </button>
+          <button
+            onClick={() => {
+              const toValidate = items
+                .filter(i => i.ncm && i.cfop)
+                .map(i => ({ xProd: i.xProd, ncm: i.ncm!, cfop: i.cfop, tpNF: i.tpNF, ncmDesc: i.ncmDesc ?? undefined }))
+              cfopMutation.mutate({ items: toValidate, forceRevalidate: true })
+            }}
+            disabled={!data || cfopMutation.isPending || items.length === 0}
+            title="Ignora o cache e reconsulta a IA com o prompt atualizado"
+            className="flex items-center gap-1.5 h-9 px-3 rounded-md border border-purple-200 bg-white text-purple-700 text-sm hover:bg-purple-50 disabled:opacity-50"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Revalidar CFOP
           </button>
           <button
             onClick={exportCsv}

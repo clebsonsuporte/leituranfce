@@ -239,7 +239,7 @@ O NCM é compatível com o produto? Responda APENAS em JSON:
 
   // POST /api/tax/cfop/validate-items — valida CFOP vs produto/NCM via IA
   app.post('/cfop/validate-items', { preHandler: [app.authenticate] }, async (req, reply) => {
-    const body = req.body as { items: Array<{ xProd: string; ncm: string; cfop: string; tpNF: number; ncmDesc?: string }> }
+    const body = req.body as { items: Array<{ xProd: string; ncm: string; cfop: string; tpNF: number; ncmDesc?: string }>; forceRevalidate?: boolean }
     if (!Array.isArray(body?.items) || body.items.length === 0) {
       return reply.status(400).send({ error: 'items é obrigatório' })
     }
@@ -253,13 +253,15 @@ O NCM é compatível com o produto? Responda APENAS em JSON:
     for (const item of unique) {
       const key = `${item.xProd}||${item.ncm}||${item.cfop}||${item.tpNF}`
 
-      // Verifica cache
-      const cached = await prisma.cfopValidationCache.findUnique({
-        where: { xProd_ncm_cfop_tpNF: { xProd: item.xProd, ncm: item.ncm, cfop: item.cfop, tpNF: item.tpNF } },
-      })
-      if (cached) {
-        results[key] = { status: cached.status, cfopSugerido: cached.cfopSugerido, motivo: cached.motivo }
-        continue
+      // Verifica cache (a menos que forceRevalidate=true)
+      if (!body.forceRevalidate) {
+        const cached = await prisma.cfopValidationCache.findUnique({
+          where: { xProd_ncm_cfop_tpNF: { xProd: item.xProd, ncm: item.ncm, cfop: item.cfop, tpNF: item.tpNF } },
+        })
+        if (cached) {
+          results[key] = { status: cached.status, cfopSugerido: cached.cfopSugerido, motivo: cached.motivo }
+          continue
+        }
       }
 
       // Busca descrição do NCM se não fornecida
@@ -282,7 +284,7 @@ O NCM é compatível com o produto? Responda APENAS em JSON:
       try {
         const msg = await anthropic.messages.create({
           model: 'claude-haiku-4-5-20251001',
-          max_tokens: 200,
+          max_tokens: 300,
           messages: [{
             role: 'user',
             content: `Você é um especialista em legislação tributária brasileira (NF-e/NFC-e).
@@ -292,12 +294,19 @@ NCM: ${item.ncm}${ncmDesc ? ` — ${ncmDesc}` : ''}
 CFOP atual: ${item.cfop} (${cfopDesc})
 Tipo de operação: ${operacao}
 
-O CFOP ${item.cfop} está correto para este produto e operação? Considere:
-- Se é entrada ou saída (1xxx/2xxx=entrada, 5xxx/6xxx=saída)
-- Se o CFOP corresponde à natureza do produto (mercadoria, serviço, ativo, etc.)
-- Se há um CFOP mais adequado
+Analise se o CFOP ${item.cfop} está correto para este produto e operação. Regras obrigatórias:
 
-Responda APENAS em JSON: {"status":"correto"|"incorreto"|"incerto","cfop_sugerido":"XXXX ou null","motivo":"frase curta explicando"}`,
+1. Direção: 1xxx/2xxx = entrada; 5xxx/6xxx = saída. Sentido errado = "incorreto".
+2. 5101 vs 5102 (crítico):
+   - 5101 = venda de PRODUÇÃO PRÓPRIA (estabelecimento fabricou/produziu o item)
+   - 5102 = venda de MERCADORIA ADQUIRIDA DE TERCEIROS (comprou pronto e revendeu)
+   - Se pelo nome do produto NÃO É POSSÍVEL DETERMINAR se o estabelecimento produz ou compra, retorne "incerto" explicando a dúvida.
+   - Exemplo: "SOBREMESA" em padaria pode ser produção própria (5101) ou revenda (5102) — retorne "incerto".
+3. Produtos claramente industrializados pelo emissor → 5101
+4. Produtos claramente adquiridos para revenda → 5102
+5. Serviços → 5933; Ativo imobilizado → 1411/5551; Uso/consumo → 1556
+
+Responda APENAS em JSON: {"status":"correto"|"incorreto"|"incerto","cfop_sugerido":"XXXX"|null,"motivo":"frase curta explicando a dúvida ou o erro"}`,
           }],
         })
         const raw = (msg.content[0] as { text: string }).text.trim()
