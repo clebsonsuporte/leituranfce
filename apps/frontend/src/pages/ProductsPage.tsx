@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { Search, ArrowUpDown, Package, ChevronLeft, ChevronRight } from 'lucide-react'
-import { useQuery } from '@tanstack/react-query'
+import { Search, ArrowUpDown, Package, ChevronLeft, ChevronRight, CheckCircle2, XCircle, HelpCircle, Loader2 } from 'lucide-react'
+import { useQuery, useMutation } from '@tanstack/react-query'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -10,12 +10,42 @@ import api from '@/lib/api'
 import { useFilterStore } from '@/stores/filterStore'
 import { formatCurrency, formatNumber } from '@/lib/utils'
 
+type NcmValidationResult = {
+  status: 'compativel' | 'incompativel' | 'incerto'
+  ncmDesc: string | null
+  motivo: string | null
+}
+
+function NcmBadge({ result }: { result: NcmValidationResult | undefined }) {
+  if (!result) return null
+  if (result.status === 'compativel') {
+    return (
+      <span title={`${result.ncmDesc}\n✅ ${result.motivo}`} className="cursor-help">
+        <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
+      </span>
+    )
+  }
+  if (result.status === 'incompativel') {
+    return (
+      <span title={`${result.ncmDesc}\n❌ ${result.motivo}`} className="cursor-help">
+        <XCircle className="h-3.5 w-3.5 text-red-500" />
+      </span>
+    )
+  }
+  return (
+    <span title={`${result.ncmDesc || 'NCM não encontrado'}\n⚠️ ${result.motivo}`} className="cursor-help">
+      <HelpCircle className="h-3.5 w-3.5 text-amber-400" />
+    </span>
+  )
+}
+
 export default function ProductsPage() {
   const { selectedCompanyId, selectedCompetencia } = useFilterStore()
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [sortBy, setSortBy] = useState('vProd')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  const [validations, setValidations] = useState<Record<string, NcmValidationResult>>({})
 
   const params = new URLSearchParams({ page: String(page), limit: '50', sortBy, sortDir })
   if (selectedCompanyId) params.set('companyId', selectedCompanyId)
@@ -33,6 +63,14 @@ export default function ProductsPage() {
   const products = data?.products || []
   const total = data?.total || 0
   const totalPages = data?.totalPages || 1
+
+  const validateMutation = useMutation({
+    mutationFn: async (items: Array<{ xProd: string; ncm: string }>) => {
+      const { data } = await api.post('/tax/ncm/validate-products', { items })
+      return data as Record<string, NcmValidationResult>
+    },
+    onSuccess: (data) => setValidations(prev => ({ ...prev, ...data })),
+  })
 
   // Top 10 for bar chart
   const top10 = products.slice(0, 10)
@@ -130,15 +168,33 @@ export default function ProductsPage() {
 
       {/* Search + Table */}
       <div className="space-y-3">
-        <div className="relative max-w-xs">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-          <input
-            type="text"
-            placeholder="Buscar por produto ou NCM..."
-            value={search}
-            onChange={(e) => { setSearch(e.target.value); setPage(1) }}
-            className="h-9 w-full pl-9 pr-3 rounded-md border border-gray-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-          />
+        <div className="flex items-center gap-3">
+          <div className="relative max-w-xs">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Buscar por produto ou NCM..."
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); setPage(1) }}
+              className="h-9 w-full pl-9 pr-3 rounded-md border border-gray-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+            />
+          </div>
+          {products.length > 0 && (
+            <button
+              onClick={() => {
+                const items = products
+                  .filter((p: { xProd: string; ncm: string }) => p.ncm)
+                  .map((p: { xProd: string; ncm: string }) => ({ xProd: p.xProd, ncm: p.ncm }))
+                validateMutation.mutate(items)
+              }}
+              disabled={validateMutation.isPending}
+              className="flex items-center gap-1.5 h-9 px-3 rounded-md border border-amber-300 bg-amber-50 text-amber-800 text-sm font-medium hover:bg-amber-100 disabled:opacity-60 transition-colors"
+            >
+              {validateMutation.isPending
+                ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />Validando...</>
+                : '🔍 Validar NCMs'}
+            </button>
+          )}
         </div>
 
         <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
@@ -190,7 +246,12 @@ export default function ProductsPage() {
                         <p className="text-sm font-medium truncate max-w-[200px]">{p.xProd}</p>
                         <p className="text-xs text-gray-400">{p.count} nota(s)</p>
                       </TableCell>
-                      <TableCell className="text-xs text-gray-600">{p.ncm || '-'}</TableCell>
+                      <TableCell className="text-xs text-gray-600">
+                        <span className="flex items-center gap-1">
+                          {p.ncm || '-'}
+                          <NcmBadge result={validations[`${p.xProd}||${p.ncm}`]} />
+                        </span>
+                      </TableCell>
                       <TableCell className="text-xs">{p.cfop}</TableCell>
                       <TableCell className="text-sm">{formatNumber(p.qCom, 3)}</TableCell>
                       <TableCell className="text-right text-sm font-medium">{formatCurrency(p.vProd)}</TableCell>

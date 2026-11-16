@@ -296,3 +296,16 @@ enum AlertSeverity {
   ERROR
   CRITICAL
 }
+
+model NcmValidationCache {
+  id          String   @id @default(cuid())
+  xProd       String
+  ncm         String
+  status      String   // "compativel" | "incompativel" | "incerto"
+  ncmDesc     String?
+  motivo      String?
+  createdAt   DateTime @default(now())
+
+  @@unique([xProd, ncm])
+  @@map("ncm_validation_cache")
+}

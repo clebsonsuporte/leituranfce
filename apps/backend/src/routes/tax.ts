@@ -1,5 +1,10 @@
 import { FastifyInstance } from 'fastify'
 import { calcularTributos, TaxConsultaInput } from '../services/tax/taxEngine.js'
+import Anthropic from '@anthropic-ai/sdk'
+import { PrismaClient } from '@prisma/client'
+
+const prisma = new PrismaClient()
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
 export default async function taxRoutes(app: FastifyInstance) {
 
@@ -60,6 +65,97 @@ export default async function taxRoutes(app: FastifyInstance) {
     } catch {
       return reply.send([])
     }
+  })
+
+  // POST /api/tax/ncm/validate-products — valida NCM vs descrição do produto via IA
+  app.post('/ncm/validate-products', { preHandler: [app.authenticate] }, async (req, reply) => {
+    const body = req.body as { items: Array<{ xProd: string; ncm: string }> }
+    if (!Array.isArray(body?.items) || body.items.length === 0) {
+      return reply.status(400).send({ error: 'items é obrigatório' })
+    }
+
+    // Deduplicar por (xProd, ncm)
+    const unique = Array.from(
+      new Map(body.items.map(i => [`${i.xProd}||${i.ncm}`, i])).values()
+    ).slice(0, 50) // limite por chamada
+
+    const results: Record<string, { status: string; ncmDesc: string | null; motivo: string | null }> = {}
+
+    for (const item of unique) {
+      const key = `${item.xProd}||${item.ncm}`
+      const ncmClean = item.ncm?.replace(/\D/g, '') || ''
+
+      if (!ncmClean || ncmClean.length < 4) {
+        results[key] = { status: 'incerto', ncmDesc: null, motivo: 'NCM ausente ou muito curto' }
+        continue
+      }
+
+      // Verifica cache
+      const cached = await prisma.ncmValidationCache.findUnique({
+        where: { xProd_ncm: { xProd: item.xProd, ncm: ncmClean } },
+      })
+      if (cached) {
+        results[key] = { status: cached.status, ncmDesc: cached.ncmDesc, motivo: cached.motivo }
+        continue
+      }
+
+      // Busca descrição do NCM na BrasilAPI
+      let ncmDesc: string | null = null
+      try {
+        const brasilRes = await fetch(
+          `https://brasilapi.com.br/api/ncm/v1/${ncmClean}`,
+          { signal: AbortSignal.timeout(6000), headers: { Accept: 'application/json' } }
+        )
+        if (brasilRes.ok) {
+          const brasilData = await brasilRes.json() as { descricao?: string }
+          ncmDesc = brasilData.descricao || null
+        }
+      } catch { /* ignora timeout */ }
+
+      if (!ncmDesc) {
+        const row = { status: 'incerto', ncmDesc: null, motivo: 'NCM não encontrado na tabela TIPI' }
+        results[key] = row
+        await prisma.ncmValidationCache.create({ data: { xProd: item.xProd, ncm: ncmClean, ...row } })
+        continue
+      }
+
+      // Chama Claude Haiku para comparação semântica
+      let status = 'incerto'
+      let motivo = ''
+      try {
+        const msg = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 120,
+          messages: [{
+            role: 'user',
+            content: `Produto fiscal: "${item.xProd}"
+NCM: ${ncmClean}
+Descrição oficial do NCM na tabela TIPI: "${ncmDesc}"
+
+O NCM é compatível com o produto? Responda APENAS em JSON: {"status":"compativel"|"incompativel"|"incerto","motivo":"uma frase curta"}`,
+          }],
+        })
+        const raw = (msg.content[0] as { text: string }).text.trim()
+        const jsonMatch = raw.match(/\{.*\}/s)
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]) as { status: string; motivo: string }
+          status = ['compativel', 'incompativel', 'incerto'].includes(parsed.status)
+            ? parsed.status
+            : 'incerto'
+          motivo = parsed.motivo || ''
+        }
+      } catch { motivo = 'Erro ao consultar IA' }
+
+      const row = { status, ncmDesc, motivo }
+      results[key] = row
+      await prisma.ncmValidationCache.upsert({
+        where: { xProd_ncm: { xProd: item.xProd, ncm: ncmClean } },
+        create: { xProd: item.xProd, ncm: ncmClean, ...row },
+        update: row,
+      })
+    }
+
+    return reply.send(results)
   })
 
   // GET /api/tax/ufs — lista de UFs disponíveis
