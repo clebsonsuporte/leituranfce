@@ -267,7 +267,7 @@ export async function generateAnalyticalReport(filters: ReportFilters): Promise<
   return htmlToPdf(html)
 }
 
-async function htmlToPdf(html: string): Promise<Buffer> {
+export async function htmlToPdf(html: string): Promise<Buffer> {
   const puppeteer = (await import('puppeteer')).default
   const browser = await puppeteer.launch({
     headless: true,

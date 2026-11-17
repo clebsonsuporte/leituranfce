@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Search, ArrowUpDown, Package, ChevronLeft, ChevronRight, CheckCircle2, XCircle, HelpCircle, Loader2 } from 'lucide-react'
+import { Search, ArrowUpDown, Package, ChevronLeft, ChevronRight, CheckCircle2, XCircle, HelpCircle, Loader2, FileDown } from 'lucide-react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
@@ -62,6 +62,8 @@ export default function ProductsPage() {
   const [sortBy, setSortBy] = useState('vProd')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [validations, setValidations] = useState<Record<string, NcmValidationResult>>({})
+  const [gerandoPdf, setGerandoPdf] = useState(false)
+  const [erroPdf, setErroPdf] = useState<string | null>(null)
 
   const params = new URLSearchParams({ page: String(page), limit: '50', sortBy, sortDir })
   if (selectedCompanyId) params.set('companyId', selectedCompanyId)
@@ -87,6 +89,29 @@ export default function ProductsPage() {
     },
     onSuccess: (data) => setValidations(prev => ({ ...prev, ...data })),
   })
+
+  async function baixarPdf() {
+    setGerandoPdf(true)
+    setErroPdf(null)
+    try {
+      const pdfParams = new URLSearchParams()
+      if (selectedCompanyId) pdfParams.set('companyId', selectedCompanyId)
+      if (selectedCompetencia) pdfParams.set('competencia', selectedCompetencia)
+      if (search) pdfParams.set('search', search)
+      const res = await api.get(`/products/report/pdf?${pdfParams}`, { responseType: 'blob', timeout: 180_000 })
+      const nome = /filename="([^"]+)"/.exec(res.headers['content-disposition'] ?? '')?.[1]
+      const url = URL.createObjectURL(res.data)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = nome ?? `produtos-ncm-cfop-${selectedCompetencia || 'geral'}.pdf`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      setErroPdf('Não foi possível gerar o PDF. Tente novamente.')
+    } finally {
+      setGerandoPdf(false)
+    }
+  }
 
   // Top 10 for bar chart
   const top10 = products.slice(0, 10)
@@ -211,6 +236,18 @@ export default function ProductsPage() {
                 : '🔍 Validar NCMs'}
             </button>
           )}
+          {products.length > 0 && (
+            <button
+              onClick={baixarPdf}
+              disabled={gerandoPdf}
+              className="flex items-center gap-1.5 h-9 px-3 rounded-md border border-gray-300 bg-white text-gray-800 text-sm font-medium hover:bg-gray-50 disabled:opacity-60 transition-colors"
+            >
+              {gerandoPdf
+                ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />Gerando PDF...</>
+                : <><FileDown className="h-3.5 w-3.5" />Relatório PDF</>}
+            </button>
+          )}
+          {erroPdf && <span className="text-xs text-red-600 self-center">{erroPdf}</span>}
         </div>
 
         <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">

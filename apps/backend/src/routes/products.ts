@@ -1,5 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify'
 import prisma from '../lib/prisma.js'
+import { htmlToPdf } from '../services/reports/pdfService.js'
+import { buildProductsReport, type ProductsReportFilters } from '../services/reports/productsReportService.js'
 
 const productsRoutes: FastifyPluginAsync = async (fastify) => {
   // GET /products
@@ -94,6 +96,15 @@ const productsRoutes: FastifyPluginAsync = async (fastify) => {
       limit,
       totalPages: Math.ceil(totalGroups.length / limit),
     })
+  })
+
+  // GET /products/report/pdf — mesma lista da tela (filtros e ordenação), sem paginação
+  fastify.get('/report/pdf', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const { html, filename } = await buildProductsReport(request.query as ProductsReportFilters)
+    const pdf = await htmlToPdf(html)
+    reply.header('Content-Type', 'application/pdf')
+    reply.header('Content-Disposition', `attachment; filename="${filename}"`)
+    return reply.send(pdf)
   })
 
   // GET /products/ncm-summary
