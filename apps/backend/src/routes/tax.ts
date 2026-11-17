@@ -2,6 +2,13 @@ import { FastifyInstance } from 'fastify'
 import { calcularTributos, TaxConsultaInput } from '../services/tax/taxEngine.js'
 import Anthropic from '@anthropic-ai/sdk'
 import { PrismaClient, Prisma } from '@prisma/client'
+import { descreverCfop } from '../services/tax/taxData.js'
+import {
+  classificarNcmPisCofins,
+  classificarCstPisCofins,
+  divergenciaPisCofins,
+  isCfopSaida,
+} from '../services/tax/pisCofinsClassifier.js'
 
 const prisma = new PrismaClient()
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
@@ -343,6 +350,7 @@ Responda APENAS em JSON: {"status":"correto"|"incorreto"|"incerto","cfop_sugerid
       vTotal: number
       entradaCount: number
       saidaCount: number
+      cstPis: string | null
     }
 
     const filters: Prisma.Sql[] = [Prisma.sql`n.status != 'CANCELADA'`]
@@ -358,7 +366,8 @@ Responda APENAS em JSON: {"status":"correto"|"incorreto"|"incerto","cfop_sugerid
         COUNT(*)::int AS count,
         COALESCE(SUM(ni."vProd")::float, 0) AS "vTotal",
         SUM(CASE WHEN n."tpNF" = 0 THEN 1 ELSE 0 END)::int AS "entradaCount",
-        SUM(CASE WHEN n."tpNF" = 1 THEN 1 ELSE 0 END)::int AS "saidaCount"
+        SUM(CASE WHEN n."tpNF" = 1 THEN 1 ELSE 0 END)::int AS "saidaCount",
+        MODE() WITHIN GROUP (ORDER BY ni."cstPis") AS "cstPis"
       FROM nfe_items ni
       JOIN nfes n ON n.id = ni."nfeId"
       WHERE ${whereClause}
@@ -378,8 +387,10 @@ Responda APENAS em JSON: {"status":"correto"|"incorreto"|"incerto","cfop_sugerid
       const cache = cacheMap.get(`${r.xProd}||${r.ncm ?? ''}`)
       const { cfopStatus, cfopMotivo } = auditCfop(r.cfop, r.entradaCount, r.saidaCount)
       const ncmStatus = cache?.status ?? null
+      const lei = classificarNcmPisCofins(r.ncm)
+      const pisDivergencia = divergenciaPisCofins(lei, r.cstPis, r.cfop)
       const risco = ncmStatus === 'incompativel' || cfopStatus === 'erro' ? 'alto'
-        : ncmStatus === 'incerto' || cfopStatus === 'atencao' ? 'medio'
+        : ncmStatus === 'incerto' || cfopStatus === 'atencao' || pisDivergencia ? 'medio'
         : ncmStatus === 'compativel' && cfopStatus === 'ok' ? 'ok'
         : 'nao_validado'
 
@@ -390,6 +401,11 @@ Responda APENAS em JSON: {"status":"correto"|"incorreto"|"incerto","cfop_sugerid
         ncmStatus, ncmDesc: cache?.ncmDesc ?? null,
         ncmSugerido: cache?.ncmSugerido ?? null, motivo: cache?.motivo ?? null,
         cfopStatus, cfopMotivo, risco,
+        cstPis: r.cstPis,
+        pisCofins: {
+          regime: lei.regime, grupo: lei.grupo, base: lei.base, verificar: lei.verificar,
+          divergencia: pisDivergencia,
+        },
       }
     })
 
@@ -404,9 +420,155 @@ Responda APENAS em JSON: {"status":"correto"|"incorreto"|"incerto","cfop_sugerid
       ncmCompativel: items.filter(i => i.ncmStatus === 'compativel').length,
       cfopErro: items.filter(i => i.cfopStatus === 'erro').length,
       cfopAtencao: items.filter(i => i.cfopStatus === 'atencao').length,
+      pisCofinsMonofasico: items.filter(i => i.pisCofins.regime === 'monofasico').length,
+      pisCofinsSt: items.filter(i => i.pisCofins.regime === 'st').length,
+      pisCofinsDivergente: items.filter(i => i.pisCofins.divergencia).length,
     }
 
-    return reply.send({ items, summary })
+    return reply.send({ items, summary, truncated: raw.length === 300 })
+  })
+
+  // GET /api/tax/pis-cofins-cfop — receita por CFOP segregada em Normal / ST / Monofásico
+  app.get('/pis-cofins-cfop', { preHandler: [app.authenticate] }, async (req, reply) => {
+    const { companyId, competencia } = req.query as { companyId?: string; competencia?: string }
+
+    const filters: Prisma.Sql[] = [Prisma.sql`n.status NOT IN ('CANCELADA', 'DENEGADA', 'INUTILIZADA')`]
+    if (companyId) filters.push(Prisma.sql`n."companyId" = ${companyId}`)
+    if (competencia) filters.push(Prisma.sql`n.competencia = ${competencia}`)
+    const whereClause = Prisma.join(filters, ' AND ')
+
+    const raw = await prisma.$queryRaw<Array<{
+      cfop: string; ncm: string | null; cstPis: string | null; xProd: string; count: number; valor: number
+    }>>`
+      SELECT
+        ni.cfop,
+        ni.ncm,
+        ni."cstPis",
+        ni."xProd",
+        COUNT(*)::int AS count,
+        COALESCE(SUM(ni."vProd" - ni."vDesc")::float, 0) AS valor
+      FROM nfe_items ni
+      JOIN nfes n ON n.id = ni."nfeId"
+      WHERE ${whereClause}
+      GROUP BY ni.cfop, ni.ncm, ni."cstPis", ni."xProd"
+    `
+
+    type Linha = {
+      cfop: string; descricao: string; direcao: 'saida' | 'entrada'
+      total: number; normal: number; st: number; monofasico: number
+      monofasicoDeclarado: number; stDeclarado: number; divergente: number; itens: number
+    }
+    const novaLinha = (cfop: string, descricao: string, direcao: Linha['direcao']): Linha => ({
+      cfop, descricao, direcao,
+      total: 0, normal: 0, st: 0, monofasico: 0, monofasicoDeclarado: 0, stDeclarado: 0, divergente: 0, itens: 0,
+    })
+
+    const porCfop = new Map<string, Linha>()
+    const totais = { saida: novaLinha('', 'Total das saídas', 'saida'), entrada: novaLinha('', 'Total das entradas', 'entrada') }
+    const divergencias: Array<{
+      xProd: string; ncm: string | null; cfop: string; cstPis: string | null; valor: number; count: number
+      regime: string; grupo: string | null; base: string | null; verificar: string | null
+      tipo: string; severidade: string; mensagem: string
+    }> = []
+
+    for (const r of raw) {
+      const direcao: Linha['direcao'] = isCfopSaida(r.cfop) ? 'saida' : 'entrada'
+      let linha = porCfop.get(r.cfop)
+      if (!linha) {
+        linha = novaLinha(r.cfop, descreverCfop(r.cfop).descricao, direcao)
+        porCfop.set(r.cfop, linha)
+      }
+      const lei = classificarNcmPisCofins(r.ncm)
+      const declarado = classificarCstPisCofins(r.cstPis)
+      const div = divergenciaPisCofins(lei, r.cstPis, r.cfop)
+
+      for (const alvo of [linha, totais[direcao]]) {
+        alvo.total += r.valor
+        alvo[lei.regime] += r.valor
+        alvo.itens += r.count
+        if (declarado === 'monofasico') alvo.monofasicoDeclarado += r.valor
+        if (declarado === 'st') alvo.stDeclarado += r.valor
+        if (div) alvo.divergente += r.valor
+      }
+      if (div) {
+        divergencias.push({
+          xProd: r.xProd, ncm: r.ncm, cfop: r.cfop, cstPis: r.cstPis, valor: r.valor, count: r.count,
+          regime: lei.regime, grupo: lei.grupo, base: lei.base, verificar: lei.verificar, ...div,
+        })
+      }
+    }
+
+    divergencias.sort((a, b) => b.valor - a.valor)
+    const somaTipos = (tipos: string[]) =>
+      divergencias.filter(d => tipos.includes(d.tipo)).reduce((s, d) => s + d.valor, 0)
+
+    return reply.send({
+      cfops: [...porCfop.values()].sort((a, b) =>
+        a.direcao === b.direcao ? b.total - a.total : a.direcao === 'saida' ? -1 : 1),
+      totais,
+      resumo: {
+        produtosDivergentes: divergencias.length,
+        monofasicoNaoDeclarado: somaTipos(['monofasico_tributado', 'monofasico_sem_cst']),
+        stNaoDeclarada: somaTipos(['st_nao_declarada']),
+        declaradoSemBase: somaTipos(['cst_monofasico_sem_base', 'cst_st_sem_base']),
+      },
+      divergencias: divergencias.slice(0, 200),
+      divergenciasTotal: divergencias.length,
+    })
+  })
+
+  // GET /api/tax/reforma/pendentes — notas de 2026+ cujo XML ainda não traz os grupos IBS/CBS
+  app.get('/reforma/pendentes', { preHandler: [app.authenticate] }, async (req, reply) => {
+    const { companyId, competencia } = req.query as { companyId?: string; competencia?: string }
+
+    const filters: Prisma.Sql[] = [
+      Prisma.sql`n.status NOT IN ('CANCELADA', 'DENEGADA', 'INUTILIZADA')`,
+      Prisma.sql`n.competencia >= '2026-01'`,
+    ]
+    if (companyId) filters.push(Prisma.sql`n."companyId" = ${companyId}`)
+    if (competencia) filters.push(Prisma.sql`n.competencia = ${competencia}`)
+    const whereClause = Prisma.join(filters, ' AND ')
+
+    const notas = await prisma.$queryRaw<Array<{
+      id: string; mod: number; nNF: string; serie: string; dhEmi: Date; emitNome: string
+      vNF: number; propria: boolean; adequada: boolean
+    }>>`
+      SELECT
+        n.id, n.mod, n."nNF", n.serie, n."dhEmi", n."emitNome",
+        n."vNF"::float AS "vNF",
+        (regexp_replace(n."emitCnpj", '[^0-9]', '', 'g') = regexp_replace(c.cnpj, '[^0-9]', '', 'g')) AS propria,
+        (n."xmlRaw" ~ '<IBSCBS[[:space:]>]'
+          AND n."xmlRaw" LIKE '%<IBSCBSTot%'
+          AND n."xmlRaw" LIKE '%<cClassTrib>%') AS adequada
+      FROM nfes n
+      JOIN companies c ON c.id = n."companyId"
+      WHERE ${whereClause}
+      ORDER BY n."dhEmi" DESC
+    `
+
+    const grupo = () => ({ total: 0, adequadas: 0, pendentes: 0, valorPendente: 0 })
+    const resumo = { geral: grupo(), proprias: grupo(), terceiros: grupo(), nfe: grupo(), nfce: grupo() }
+    for (const n of notas) {
+      const alvos = [resumo.geral, n.propria ? resumo.proprias : resumo.terceiros]
+      if (n.mod === 55) alvos.push(resumo.nfe)
+      if (n.mod === 65) alvos.push(resumo.nfce)
+      for (const g of alvos) {
+        g.total++
+        if (n.adequada) g.adequadas++
+        else { g.pendentes++; g.valorPendente += n.vNF }
+      }
+    }
+
+    const company = companyId
+      ? await prisma.company.findUnique({ where: { id: companyId }, select: { regime: true } })
+      : null
+
+    return reply.send({
+      resumo,
+      regime: company?.regime ?? null,
+      pendentes: notas.filter(n => !n.adequada).slice(0, 50)
+        .map(({ adequada: _adequada, ...n }) => n),
+    })
   })
 
   // GET /api/tax/reforma — dados da reforma tributária

@@ -1,50 +1,33 @@
 import { useState } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
-import { Shield, AlertTriangle, XCircle, CheckCircle2, HelpCircle, Download, RefreshCw, Loader2 } from 'lucide-react'
+import { Shield, AlertTriangle, XCircle, CheckCircle2, HelpCircle, Download, RefreshCw, Loader2, Printer, ChevronDown } from 'lucide-react'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Skeleton } from '@/components/ui/skeleton'
 import KpiCard from '@/components/dashboard/KpiCard'
+import PisCofinsCfopCard from '@/components/audit/PisCofinsCfopCard'
+import ReformaPendenteCard from '@/components/audit/ReformaPendenteCard'
 import api from '@/lib/api'
 import { useFilterStore } from '@/stores/filterStore'
+import { useCompanies } from '@/hooks/useCompanies'
+import {
+  cfopValidationKey,
+  usePisCofinsCfop,
+  useReformaPendentes,
+  type AuditItem,
+  type AuditSummary,
+  type CfopValidationResult,
+} from '@/hooks/useAudit'
+import { printAuditReport, type PrintEscopo } from '@/lib/printAuditReport'
 import { formatCurrency } from '@/lib/utils'
 
-type CfopValidationResult = {
-  status: 'correto' | 'incorreto' | 'incerto'
-  cfopSugerido: string | null
-  motivo: string | null
-}
+type FilterType = 'todos' | 'alto' | 'medio' | 'ok' | 'nao_validado' | 'pis_cofins'
 
-type AuditItem = {
-  xProd: string
-  ncm: string | null
-  cfop: string
-  tpNF: number
-  count: number
-  vTotal: number
-  ncmStatus: 'compativel' | 'incompativel' | 'incerto' | null
-  ncmDesc: string | null
-  ncmSugerido: string | null
-  motivo: string | null
-  cfopStatus: 'ok' | 'atencao' | 'erro'
-  cfopMotivo: string
-  risco: 'alto' | 'medio' | 'ok' | 'nao_validado'
+const REGIME_BADGE = {
+  normal: { label: 'Normal', cls: 'bg-gray-50 text-gray-600 border-gray-200' },
+  st: { label: 'Subst. Tributária', cls: 'bg-purple-50 text-purple-700 border-purple-200' },
+  monofasico: { label: 'Monofásico', cls: 'bg-teal-50 text-teal-700 border-teal-200' },
 }
-
-type AuditSummary = {
-  total: number
-  alto: number
-  medio: number
-  ok: number
-  naoValidado: number
-  ncmIncompativel: number
-  ncmIncerto: number
-  ncmCompativel: number
-  cfopErro: number
-  cfopAtencao: number
-}
-
-type FilterType = 'todos' | 'alto' | 'medio' | 'ok' | 'nao_validado'
 
 const RISCO_CONFIG = {
   alto: { label: 'Alto Risco', color: 'text-red-700', bg: 'bg-red-50 border-red-200', dot: 'bg-red-500' },
@@ -79,6 +62,10 @@ function CfopStatusIcon({ status }: { status: AuditItem['cfopStatus'] }) {
 export default function AuditPage() {
   const { selectedCompanyId, selectedCompetencia } = useFilterStore()
   const [filter, setFilter] = useState<FilterType>('todos')
+  const [printOpen, setPrintOpen] = useState(false)
+  const { data: companies } = useCompanies()
+  const pisCofins = usePisCofinsCfop(selectedCompanyId, selectedCompetencia)
+  const reforma = useReformaPendentes(selectedCompanyId, selectedCompetencia)
 
   const params = new URLSearchParams()
   if (selectedCompanyId) params.set('companyId', selectedCompanyId)
@@ -98,16 +85,38 @@ export default function AuditPage() {
     queryKey: ['audit', selectedCompanyId, selectedCompetencia],
     queryFn: async () => {
       const { data } = await api.get(`/tax/audit?${params}`)
-      return data as { items: AuditItem[]; summary: AuditSummary }
+      return data as { items: AuditItem[]; summary: AuditSummary; truncated: boolean }
     },
   })
 
   const items = data?.items ?? []
   const summary = data?.summary
-  const filtered = filter === 'todos' ? items : items.filter(i => i.risco === filter)
+  const filtered = filter === 'todos' ? items
+    : filter === 'pis_cofins' ? items.filter(i => i.pisCofins.divergencia)
+    : items.filter(i => i.risco === filter)
+
+  function refreshAll() {
+    refetch()
+    pisCofins.refetch()
+    reforma.refetch()
+  }
+
+  function print(escopo: PrintEscopo) {
+    setPrintOpen(false)
+    const company = companies?.find(c => c.id === selectedCompanyId)
+    printAuditReport({
+      escopo,
+      empresa: company ? { name: company.name, cnpj: company.cnpj } : null,
+      competencia: selectedCompetencia,
+      items: filtered,
+      cfopValidations,
+      pisCofins: pisCofins.data,
+      reforma: reforma.data,
+    })
+  }
 
   function exportCsv() {
-    const header = ['Produto', 'NCM Atual', 'NCM Status', 'NCM Sugerido', 'CFOP', 'CFOP Status', 'CFOP Descrição', 'Nº Notas', 'Valor Total', 'Risco']
+    const header = ['Produto', 'NCM Atual', 'NCM Status', 'NCM Sugerido', 'CFOP', 'CFOP Status', 'CFOP Descrição', 'PIS/COFINS (lei)', 'CST PIS nota', 'PIS/COFINS divergência', 'Nº Notas', 'Valor Total', 'Risco']
     const rows = filtered.map(i => [
       `"${i.xProd}"`,
       i.ncm ?? '',
@@ -116,6 +125,9 @@ export default function AuditPage() {
       i.cfop,
       i.cfopStatus,
       `"${i.cfopMotivo}"`,
+      REGIME_BADGE[i.pisCofins.regime].label,
+      i.cstPis ?? '',
+      `"${i.pisCofins.divergencia?.mensagem ?? ''}"`,
       i.count,
       i.vTotal.toFixed(2),
       i.risco,
@@ -145,7 +157,7 @@ export default function AuditPage() {
         </div>
         <div className="flex gap-2">
           <button
-            onClick={() => refetch()}
+            onClick={refreshAll}
             disabled={isFetching}
             className="flex items-center gap-1.5 h-9 px-3 rounded-md border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
           >
@@ -180,6 +192,39 @@ export default function AuditPage() {
             <RefreshCw className="h-3.5 w-3.5" />
             Revalidar CFOP
           </button>
+          <div className="relative">
+            <button
+              onClick={() => setPrintOpen(o => !o)}
+              disabled={!data}
+              className="flex items-center gap-1.5 h-9 px-3 rounded-md border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+            >
+              <Printer className="h-3.5 w-3.5" />
+              Imprimir
+              <ChevronDown className="h-3.5 w-3.5" />
+            </button>
+            {printOpen && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setPrintOpen(false)} />
+                <div className="absolute right-0 mt-1 w-72 z-20 bg-white border border-gray-200 rounded-lg shadow-lg py-1 text-sm">
+                  <PrintOption
+                    titulo="Itens com NCM"
+                    desc={`Os ${filtered.length} produto(s) do filtro atual, com NCM, CFOP e PIS/COFINS`}
+                    onClick={() => print('itens')}
+                  />
+                  <PrintOption
+                    titulo="Somente pendências"
+                    desc="Itens em alto risco ou atenção, com a segregação por CFOP"
+                    onClick={() => print('pendencias')}
+                  />
+                  <PrintOption
+                    titulo="PIS/COFINS por CFOP"
+                    desc="Tabela Normal / ST / Monofásico e produtos divergentes"
+                    onClick={() => print('pis-cofins')}
+                  />
+                </div>
+              </>
+            )}
+          </div>
           <button
             onClick={exportCsv}
             disabled={!data}
@@ -223,9 +268,11 @@ export default function AuditPage() {
         />
       </div>
 
-      {/* Resumo NCM + CFOP */}
+      <ReformaPendenteCard data={reforma.data} isLoading={reforma.isLoading} />
+
+      {/* Resumo NCM + CFOP + PIS/COFINS */}
       {summary && (
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-semibold text-gray-700">NCM — Classificação do Produto</CardTitle>
@@ -247,12 +294,25 @@ export default function AuditPage() {
               <Row label="Correto" value={summary.total - summary.cfopErro - summary.cfopAtencao} color="text-green-600" />
             </CardContent>
           </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-semibold text-gray-700">PIS/COFINS — Regime do Produto</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <Row label="Nota diverge da lei" value={summary.pisCofinsDivergente} color="text-amber-600" />
+              <Row label="Monofásico (por NCM)" value={summary.pisCofinsMonofasico} color="text-teal-700" />
+              <Row label="Substituição tributária" value={summary.pisCofinsSt} color="text-purple-700" />
+              <Row label="Normal" value={summary.total - summary.pisCofinsMonofasico - summary.pisCofinsSt} color="text-gray-600" />
+            </CardContent>
+          </Card>
         </div>
       )}
 
+      <PisCofinsCfopCard data={pisCofins.data} isLoading={pisCofins.isLoading} />
+
       {/* Filtros */}
       <div className="flex gap-2 flex-wrap">
-        {(['todos', 'alto', 'medio', 'ok', 'nao_validado'] as FilterType[]).map(f => (
+        {(['todos', 'alto', 'medio', 'ok', 'nao_validado', 'pis_cofins'] as FilterType[]).map(f => (
           <button
             key={f}
             onClick={() => setFilter(f)}
@@ -266,6 +326,7 @@ export default function AuditPage() {
               : f === 'alto' ? `🔴 Alto Risco (${summary?.alto ?? 0})`
               : f === 'medio' ? `🟡 Atenção (${summary?.medio ?? 0})`
               : f === 'ok' ? `🟢 OK (${summary?.ok ?? 0})`
+              : f === 'pis_cofins' ? `PIS/COFINS divergente (${summary?.pisCofinsDivergente ?? 0})`
               : `⚪ Não validado (${summary?.naoValidado ?? 0})`}
           </button>
         ))}
@@ -280,6 +341,7 @@ export default function AuditPage() {
               <TableHead>NCM Atual</TableHead>
               <TableHead>NCM Sugerido</TableHead>
               <TableHead>CFOP + Análise IA</TableHead>
+              <TableHead>PIS/COFINS</TableHead>
               <TableHead className="text-right">Valor Total</TableHead>
               <TableHead>Risco</TableHead>
             </TableRow>
@@ -296,7 +358,7 @@ export default function AuditPage() {
               : filtered.length === 0
                 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center py-12 text-gray-400">
+                    <TableCell colSpan={7} className="text-center py-12 text-gray-400">
                       {items.length === 0 ? 'Nenhum dado. Clique em Atualizar para carregar.' : 'Nenhum item neste filtro.'}
                     </TableCell>
                   </TableRow>
@@ -338,8 +400,7 @@ export default function AuditPage() {
                     </TableCell>
                     <TableCell>
                       {(() => {
-                        const cfopKey = `${item.xProd}||${item.ncm ?? ''}||${item.cfop}||${item.tpNF}`
-                        const cfopAi = cfopValidations[cfopKey]
+                        const cfopAi = cfopValidations[cfopValidationKey(item)]
                         const icon = cfopAi
                           ? cfopAi.status === 'correto' ? <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
                             : cfopAi.status === 'incorreto' ? <XCircle className="h-4 w-4 text-red-500 shrink-0" />
@@ -363,7 +424,23 @@ export default function AuditPage() {
                         )
                       })()}
                     </TableCell>
-                    <TableCell />
+                    <TableCell>
+                      <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium border ${REGIME_BADGE[item.pisCofins.regime].cls}`}>
+                        {REGIME_BADGE[item.pisCofins.regime].label}
+                      </span>
+                      <p className="text-xs text-gray-400 mt-0.5" title={item.pisCofins.base ?? undefined}>
+                        {item.cstPis ? `CST ${item.cstPis} na nota` : 'Sem CST na nota'}
+                      </p>
+                      {item.pisCofins.divergencia && (
+                        <p
+                          className="text-xs text-amber-700 max-w-[190px] flex gap-1"
+                          title={item.pisCofins.divergencia.mensagem}
+                        >
+                          <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                          <span className="line-clamp-2">{item.pisCofins.divergencia.mensagem}</span>
+                        </p>
+                      )}
+                    </TableCell>
                     <TableCell className="text-right text-sm font-medium">
                       {formatCurrency(item.vTotal)}
                     </TableCell>
@@ -374,8 +451,22 @@ export default function AuditPage() {
                 ))}
           </TableBody>
         </Table>
+        {data?.truncated && (
+          <p className="px-4 py-2 text-xs text-gray-400 border-t border-gray-100">
+            Mostrando os 300 produtos de maior valor no período.
+          </p>
+        )}
       </div>
     </div>
+  )
+}
+
+function PrintOption({ titulo, desc, onClick }: { titulo: string; desc: string; onClick: () => void }) {
+  return (
+    <button onClick={onClick} className="w-full text-left px-3 py-2 hover:bg-gray-50">
+      <p className="font-medium text-gray-800">{titulo}</p>
+      <p className="text-xs text-gray-500">{desc}</p>
+    </button>
   )
 }
 
