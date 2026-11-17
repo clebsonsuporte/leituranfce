@@ -33,9 +33,11 @@ interface NfeItem {
   tribIcms?: string
   tribPis?: string
   tribAviso?: TribAviso
+  atividade?: AtividadePgdas
 }
 
 type TribAviso = 'reclassificado_ncm' | 'cst_sem_base' | 'possivel_monofasico' | null
+type AtividadePgdas = 'revenda' | 'industria' | 'revenda_exterior' | 'industria_exterior' | 'servico' | null
 
 interface Nfe {
   id: string
@@ -93,6 +95,7 @@ interface FlatItem {
   tribPis: string
   tribIcms: string
   tribAviso: TribAviso
+  atividade: AtividadePgdas
   // NF-e totals (per-nota, not per-item)
   _vNF: number
   _vICMSnf: number
@@ -141,6 +144,7 @@ function flattenNfes(nfes: Nfe[]): FlatItem[] {
         tribPis: item.tribPis || 'Tributado',
         tribIcms: item.tribIcms || 'Tributado',
         tribAviso: item.tribAviso ?? null,
+        atividade: item.atividade ?? null,
         _vNF: Number(nfe.vNF),
         _vICMSnf: Number(nfe.vICMS),
         _vSTnf: Number(nfe.vICMSST),
@@ -155,46 +159,76 @@ function flattenNfes(nfes: Nfe[]): FlatItem[] {
 
 // ─── SEGREGAÇÃO PGDAS-D ──────────────────────────────────────────────────────
 
-interface SegGroup {
-  v: number
-  c: number
-  label: string
-  desc: string
+type Soma = { v: number; c: number }
+type GrupoId = 'G1' | 'GA' | 'GB' | 'GC' | 'GD' | 'GE'
+type Atividade = 'revenda' | 'industria'
+
+const ATIVIDADES: Record<Atividade, string> = {
+  revenda: 'Revenda de mercadorias, exceto para o exterior',
+  industria: 'Venda de mercadorias industrializadas pelo contribuinte, exceto para o exterior',
 }
+
+const GRUPOS: Record<GrupoId, { badge: string; desc: string; cofins: TribTag; icms: TribTag; pis: TribTag; lancar: string }> = {
+  G1: { badge: 'Sem ST', desc: 'Tributação integral no DAS', cofins: null, icms: null, pis: null, lancar: 'todos os tributos em branco' },
+  GA: { badge: 'Com ST · A', desc: 'PIS/COFINS Monofásico + ICMS com ST', cofins: 'mono', icms: 'st', pis: 'mono', lancar: 'COFINS: Monofásica · ICMS: ST · PIS: Monofásica' },
+  GB: { badge: 'Com ST · B', desc: 'ICMS com ST (PIS/COFINS no DAS)', cofins: null, icms: 'st', pis: null, lancar: 'ICMS: Substituição Tributária (demais em branco)' },
+  GC: { badge: 'Com ST · C', desc: 'PIS/COFINS Monofásico (ICMS no DAS)', cofins: 'mono', icms: null, pis: 'mono', lancar: 'COFINS: Monofásica · PIS: Monofásica (ICMS em branco)' },
+  GD: { badge: 'Com ST · D', desc: 'PIS/COFINS por ST + ICMS com ST', cofins: 'st', icms: 'st', pis: 'st', lancar: 'COFINS: ST · ICMS: ST · PIS: ST' },
+  GE: { badge: 'Com ST · E', desc: 'PIS/COFINS por ST (ICMS no DAS)', cofins: 'st', icms: null, pis: 'st', lancar: 'COFINS: ST · PIS: ST (ICMS em branco)' },
+}
+const GRUPOS_COM_ST: GrupoId[] = ['GA', 'GB', 'GC', 'GD', 'GE']
+
+const novosGrupos = (): Record<GrupoId, Soma> => ({
+  G1: { v: 0, c: 0 }, GA: { v: 0, c: 0 }, GB: { v: 0, c: 0 }, GC: { v: 0, c: 0 }, GD: { v: 0, c: 0 }, GE: { v: 0, c: 0 },
+})
+
+// Receita bruta do item: desconto incondicional não integra a receita (LC 123/2006, art. 3º, § 1º).
+const receitaItem = (it: FlatItem) => it.vProd - it.vDesc
 
 function buildSegregacao(items: FlatItem[]) {
   const auth = items.filter(i => i.sit !== 'CANCELADO')
-  const G1: SegGroup = { v: 0, c: 0, label: 'Grupo 1', desc: 'Sem ST / Monofásica — tributação integral no DAS' }
-  const GA: SegGroup = { v: 0, c: 0, label: 'Grupo 2-A', desc: 'PIS/COFINS Monofásico + ICMS com ST — COFINS, ICMS e PIS excluídos do DAS' }
-  const GB: SegGroup = { v: 0, c: 0, label: 'Grupo 2-B', desc: 'ICMS com ST (PIS/COFINS no DAS) — apenas ICMS excluído do DAS' }
-  const GC: SegGroup = { v: 0, c: 0, label: 'Grupo 2-C', desc: 'PIS/COFINS Monofásico (ICMS no DAS) — COFINS e PIS excluídos do DAS' }
-  const GD: SegGroup = { v: 0, c: 0, label: 'Grupo 2-D', desc: 'PIS/COFINS por ST + ICMS com ST — COFINS, ICMS e PIS excluídos do DAS' }
-  const GE: SegGroup = { v: 0, c: 0, label: 'Grupo 2-E', desc: 'PIS/COFINS por ST (ICMS no DAS) — COFINS e PIS excluídos do DAS' }
-  const avisos: Record<Exclude<TribAviso, null>, { v: number; c: number }> = {
+  const atividades: Record<Atividade, Record<GrupoId, Soma>> = { revenda: novosGrupos(), industria: novosGrupos() }
+  const exterior: Soma = { v: 0, c: 0 }
+  const servico: Soma = { v: 0, c: 0 }
+  const naoReceita: Soma & { cfops: Record<string, Soma> } = { v: 0, c: 0, cfops: {} }
+  const avisos: Record<Exclude<TribAviso, null>, Soma> = {
     reclassificado_ncm: { v: 0, c: 0 },
     cst_sem_base: { v: 0, c: 0 },
     possivel_monofasico: { v: 0, c: 0 },
   }
+  let total = 0
 
   for (const it of auth) {
+    const v = receitaItem(it)
+    if (!it.atividade) {
+      naoReceita.v += v; naoReceita.c++
+      const cf = (naoReceita.cfops[it.cfop] ??= { v: 0, c: 0 })
+      cf.v += v; cf.c++
+      continue
+    }
+    total += v
+    if (it.atividade === 'servico') { servico.v += v; servico.c++; continue }
+    if (it.atividade === 'revenda_exterior' || it.atividade === 'industria_exterior') { exterior.v += v; exterior.c++; continue }
+
     const isMono  = it.tribPis === 'Tributação Monofásica'
     const isSTpis = it.tribPis === 'Substituição Tributária'
     // Só o substituído (ICMS já retido) sai do DAS; o substituto recolhe o ICMS próprio no Simples.
     const isSTicms= it.tribIcms === 'Substituição Tributária'
-    const v = it.vProd
-
-    const g = isMono ? (isSTicms ? GA : GC)
-      : isSTpis ? (isSTicms ? GD : GE)
-      : isSTicms ? GB
-      : G1
+    const id: GrupoId = isMono ? (isSTicms ? 'GA' : 'GC')
+      : isSTpis ? (isSTicms ? 'GD' : 'GE')
+      : isSTicms ? 'GB'
+      : 'G1'
+    const g = atividades[it.atividade][id]
     g.v += v; g.c++
 
     if (it.tribAviso) { avisos[it.tribAviso].v += v; avisos[it.tribAviso].c++ }
   }
 
-  const total = auth.reduce((s, i) => s + i.vProd, 0)
-  return { G1, GA, GB, GC, GD, GE, avisos, total }
+  return { atividades, exterior, servico, naoReceita, avisos, total }
 }
+
+const somaGrupos = (g: Record<GrupoId, Soma>, ids: GrupoId[]) =>
+  ids.reduce((acc, id) => ({ v: acc.v + g[id].v, c: acc.c + g[id].c }), { v: 0, c: 0 })
 
 // ─── CSV EXPORT ──────────────────────────────────────────────────────────────
 
@@ -230,16 +264,20 @@ function exportCSV(type: 'items' | 'notas' | 'seg', data: FlatItem[], nfes: Nfe[
       fmtN(Number(n.vPIS)), fmtN(Number(n.vCOFINS)), n.chNFe
     ])
   } else {
-    const { G1, GA, GB, GC, GD, GE } = buildSegregacao(data)
-    header = ['Grupo PGDAS-D','Receita (R$)','COFINS','CSLL','ICMS','INSS/CPP','IRPJ','PIS','Qtd.Itens']
-    rows = [
-      G1.v > 0 ? ['Grupo 1 – Sem ST/Monofásica', fmtN(G1.v), '', '', '', '', '', '', G1.c] : null,
-      GA.v > 0 ? ['Grupo 2-A – Mono+ST', fmtN(GA.v), 'Tributação Monofásica', '', 'Substituição Tributária', '', '', 'Tributação Monofásica', GA.c] : null,
-      GB.v > 0 ? ['Grupo 2-B – Tributado+ST', fmtN(GB.v), '', '', 'Substituição Tributária', '', '', '', GB.c] : null,
-      GC.v > 0 ? ['Grupo 2-C – Mono+Tributado', fmtN(GC.v), 'Tributação Monofásica', '', '', '', '', 'Tributação Monofásica', GC.c] : null,
-      GD.v > 0 ? ['Grupo 2-D – ST+ST', fmtN(GD.v), 'Substituição Tributária', '', 'Substituição Tributária', '', '', 'Substituição Tributária', GD.c] : null,
-      GE.v > 0 ? ['Grupo 2-E – ST PIS/COFINS', fmtN(GE.v), 'Substituição Tributária', '', '', '', '', 'Substituição Tributária', GE.c] : null,
-    ].filter(Boolean) as (string | number)[][]
+    const seg = buildSegregacao(data)
+    const marca = (t: TribTag) => t === 'mono' ? 'Tributação Monofásica' : t === 'st' ? 'Substituição Tributária' : ''
+    header = ['Atividade PGDAS-D','Grupo','Receita (R$)','COFINS','CSLL','ICMS','INSS/CPP','IRPJ','PIS','Qtd.Itens']
+    rows = []
+    for (const atv of Object.keys(ATIVIDADES) as Atividade[]) {
+      for (const id of Object.keys(GRUPOS) as GrupoId[]) {
+        const g = seg.atividades[atv][id]
+        if (g.v <= 0) continue
+        const def = GRUPOS[id]
+        rows.push([ATIVIDADES[atv], `${def.badge} – ${def.desc}`, fmtN(g.v), marca(def.cofins), '', marca(def.icms), '', '', marca(def.pis), g.c])
+      }
+    }
+    if (seg.exterior.v > 0) rows.push(['Vendas para o exterior', 'Exportação', fmtN(seg.exterior.v), '', '', '', '', '', '', seg.exterior.c])
+    if (seg.servico.v > 0) rows.push(['Prestação de serviços', 'Lançar na atividade de serviços', fmtN(seg.servico.v), '', '', '', '', '', '', seg.servico.c])
   }
 
   const csv = [header, ...rows].map(r => r.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(';')).join('\r\n')
@@ -322,6 +360,7 @@ export default function SegregacaoPage() {
   }, [allItems, search, filterTribPis, filterTribIcms, filterCfop, filterSit, sortCol, sortAsc])
 
   const seg = useMemo(() => buildSegregacao(allItems), [allItems])
+  const devolucoesVenda: { valor: number; itens: number } = data?.devolucoesVenda ?? { valor: 0, itens: 0 }
 
   const authItems = allItems.filter(i => i.sit !== 'CANCELADO')
   const cancelItems = allItems.filter(i => i.sit === 'CANCELADO')
@@ -730,13 +769,15 @@ export default function SegregacaoPage() {
           {tab === 'seg' && (
             <div className="space-y-4">
               <div className="border border-gray-200 bg-white rounded-xl px-5 py-3 text-xs text-gray-700 space-y-1.5">
-                <p className="font-semibold text-gray-800">Como os itens foram classificados</p>
+                <p className="font-semibold text-gray-800">Como a receita foi apurada</p>
                 <p>
-                  <strong>PIS/COFINS:</strong> pelo regime que a lei define para o NCM do produto (monofásico ou
-                  substituição tributária); quando o NCM não resolve, vale o CST da nota (04 = monofásico, 05 = ST).
-                  Alíquota zero, isenção e suspensão (CST 06 a 09) continuam no DAS.{' '}
+                  <strong>Base:</strong> só notas de saída emitidas pela própria empresa, com CFOP de venda, pelo valor
+                  do produto menos o desconto. Notas de entrada, devoluções, remessas, bonificações e transferências
+                  não entram na soma.{' '}
+                  <strong>PIS/COFINS:</strong> regime que a lei define para o NCM (monofásico ou ST); quando o NCM não
+                  resolve, vale o CST da nota (04 = monofásico, 05 = ST).{' '}
                   <strong>ICMS:</strong> só sai do DAS a venda como substituído (CSOSN 500 / CST 60); a venda como
-                  substituto (CSOSN 201, 202, 203) fica no Grupo 1, com o ICMS próprio no DAS.
+                  substituto (CSOSN 201, 202, 203) fica em "Sem ST".
                 </p>
                 {seg.avisos.reclassificado_ncm.c > 0 && (
                   <p className="text-teal-800">
@@ -759,39 +800,43 @@ export default function SegregacaoPage() {
                 )}
               </div>
 
-              {/* Bloco 1: Sem ST */}
-              <SegBlock
-                titulo="Revenda de mercadorias, exceto para o exterior"
-                subtitulo="Sem substituição tributária / tributação monofásica / antecipação com encerramento de tributação"
-                subtituloNote="(O substituto tributário do ICMS deve utilizar essa opção)"
-                rows={seg.G1.v > 0 ? [{
-                  receita: seg.G1.v, itens: seg.G1.c,
-                  pct: seg.total > 0 ? seg.G1.v / seg.total * 100 : 0,
-                  cofins: null, csll: null, icms: null, inss: null, irpj: null, pis: null,
-                }] : []}
-                total={seg.G1.v}
-                totalItens={seg.G1.c}
-                totalGeral={seg.total}
-                totalLabel="Total Grupo 1"
-              />
+              {seg.total === 0 && (
+                <p className="text-center text-sm text-gray-400 py-8">Nenhuma venda de emissão própria no período.</p>
+              )}
 
-              {/* Bloco 2: Com ST */}
-              <SegBlock
-                titulo="Revenda de mercadorias, exceto para o exterior"
-                subtitulo="Com substituição tributária / tributação monofásica / antecipação com encerramento de tributação"
-                subtituloNote="(O substituído tributário do ICMS deve utilizar essa opção)"
-                rows={[
-                  seg.GA.v > 0 ? { receita: seg.GA.v, itens: seg.GA.c, pct: seg.total > 0 ? seg.GA.v/seg.total*100 : 0, cofins: 'mono', csll: null, icms: 'st', inss: null, irpj: null, pis: 'mono' } : null,
-                  seg.GB.v > 0 ? { receita: seg.GB.v, itens: seg.GB.c, pct: seg.total > 0 ? seg.GB.v/seg.total*100 : 0, cofins: null, csll: null, icms: 'st', inss: null, irpj: null, pis: null } : null,
-                  seg.GC.v > 0 ? { receita: seg.GC.v, itens: seg.GC.c, pct: seg.total > 0 ? seg.GC.v/seg.total*100 : 0, cofins: 'mono', csll: null, icms: null, inss: null, irpj: null, pis: 'mono' } : null,
-                  seg.GD.v > 0 ? { receita: seg.GD.v, itens: seg.GD.c, pct: seg.total > 0 ? seg.GD.v/seg.total*100 : 0, cofins: 'st', csll: null, icms: 'st', inss: null, irpj: null, pis: 'st' } : null,
-                  seg.GE.v > 0 ? { receita: seg.GE.v, itens: seg.GE.c, pct: seg.total > 0 ? seg.GE.v/seg.total*100 : 0, cofins: 'st', csll: null, icms: null, inss: null, irpj: null, pis: 'st' } : null,
-                ].filter(Boolean) as SegRow[]}
-                total={seg.GA.v + seg.GB.v + seg.GC.v + seg.GD.v + seg.GE.v}
-                totalItens={seg.GA.c + seg.GB.c + seg.GC.c + seg.GD.c + seg.GE.c}
-                totalGeral={seg.total}
-                totalLabel="Total Grupo 2"
-              />
+              {(Object.keys(ATIVIDADES) as Atividade[]).map(atv => {
+                const g = seg.atividades[atv]
+                const comSt = somaGrupos(g, GRUPOS_COM_ST)
+                if (g.G1.v + comSt.v <= 0) return null
+                const linha = (id: GrupoId): SegRow => ({
+                  receita: g[id].v, itens: g[id].c, pct: seg.total > 0 ? g[id].v / seg.total * 100 : 0,
+                  cofins: GRUPOS[id].cofins, csll: null, icms: GRUPOS[id].icms, inss: null, irpj: null, pis: GRUPOS[id].pis,
+                })
+                return (
+                  <div key={atv} className="space-y-4">
+                    <SegBlock
+                      titulo={ATIVIDADES[atv]}
+                      subtitulo="Sem substituição tributária / tributação monofásica / antecipação com encerramento de tributação"
+                      subtituloNote="(O substituto tributário do ICMS deve utilizar essa opção)"
+                      rows={g.G1.v > 0 ? [linha('G1')] : []}
+                      total={g.G1.v}
+                      totalItens={g.G1.c}
+                      totalGeral={seg.total}
+                      totalLabel="Total sem ST"
+                    />
+                    <SegBlock
+                      titulo={ATIVIDADES[atv]}
+                      subtitulo="Com substituição tributária / tributação monofásica / antecipação com encerramento de tributação"
+                      subtituloNote="(O substituído tributário do ICMS deve utilizar essa opção)"
+                      rows={GRUPOS_COM_ST.filter(id => g[id].v > 0).map(linha)}
+                      total={comSt.v}
+                      totalItens={comSt.c}
+                      totalGeral={seg.total}
+                      totalLabel="Total com ST"
+                    />
+                  </div>
+                )
+              })}
 
               {/* Resumo Geral */}
               <Card>
@@ -799,61 +844,90 @@ export default function SegregacaoPage() {
                 <CardContent className="p-0">
                   <table className="w-full text-xs">
                     <thead><tr className="bg-gray-100 border-b border-gray-200">
-                      {['Grupo','Descrição','Receita (R$)','Itens','%'].map(h => (
+                      {['Atividade','Grupo','Receita (R$)','Itens','%'].map(h => (
                         <th key={h} className={cn('px-4 py-2 font-semibold uppercase text-[10px] text-gray-500', h === 'Receita (R$)' || h === 'Itens' || h === '%' ? 'text-right' : 'text-left')}>{h}</th>
                       ))}
                     </tr></thead>
                     <tbody>
                       {[
-                        seg.G1.v > 0 && { badge: 'Grupo 1', color: 'bg-blue-50 text-blue-700', desc: 'Sem ST / Monofásica — tributação integral no DAS', v: seg.G1.v, c: seg.G1.c },
-                        seg.GA.v > 0 && { badge: 'Grupo 2-A', color: 'bg-purple-50 text-purple-700', desc: 'PIS/COFINS Monofásico + ICMS com ST', v: seg.GA.v, c: seg.GA.c },
-                        seg.GB.v > 0 && { badge: 'Grupo 2-B', color: 'bg-purple-50 text-purple-700', desc: 'ICMS com ST (PIS/COFINS no DAS)', v: seg.GB.v, c: seg.GB.c },
-                        seg.GC.v > 0 && { badge: 'Grupo 2-C', color: 'bg-purple-50 text-purple-700', desc: 'PIS/COFINS Monofásico (ICMS no DAS)', v: seg.GC.v, c: seg.GC.c },
-                        seg.GD.v > 0 && { badge: 'Grupo 2-D', color: 'bg-purple-50 text-purple-700', desc: 'PIS/COFINS por ST + ICMS com ST', v: seg.GD.v, c: seg.GD.c },
-                        seg.GE.v > 0 && { badge: 'Grupo 2-E', color: 'bg-purple-50 text-purple-700', desc: 'PIS/COFINS por ST (ICMS no DAS)', v: seg.GE.v, c: seg.GE.c },
-                      ].filter(Boolean).map((r, i) => {
-                        const row = r as { badge: string; color: string; desc: string; v: number; c: number }
-                        return (
-                          <tr key={i} className="border-b border-gray-100 hover:bg-gray-50">
-                            <td className="px-4 py-2"><span className={cn('text-[10px] font-bold px-2 py-0.5 rounded-full', row.color)}>{row.badge}</span></td>
-                            <td className="px-4 py-2 text-gray-500 text-[11px]">{row.desc}</td>
-                            <td className="px-4 py-2 text-right font-mono font-semibold">{formatCurrency(row.v)}</td>
-                            <td className="px-4 py-2 text-right">{row.c}</td>
-                            <td className="px-4 py-2 text-right">{seg.total > 0 ? (row.v/seg.total*100).toFixed(2).replace('.',',') : '0,00'}%</td>
-                          </tr>
-                        )
-                      })}
+                        ...(Object.keys(ATIVIDADES) as Atividade[]).flatMap(atv =>
+                          (Object.keys(GRUPOS) as GrupoId[])
+                            .filter(id => seg.atividades[atv][id].v > 0)
+                            .map(id => ({ atv: ATIVIDADES[atv], badge: GRUPOS[id].badge, desc: GRUPOS[id].desc, ...seg.atividades[atv][id] }))),
+                        ...(seg.exterior.v > 0 ? [{ atv: 'Vendas para o exterior', badge: 'Exportação', desc: 'Lançar na atividade de venda para o exterior', ...seg.exterior }] : []),
+                        ...(seg.servico.v > 0 ? [{ atv: 'Prestação de serviços', badge: 'Serviços', desc: 'Lançar na atividade de serviços do anexo correspondente', ...seg.servico }] : []),
+                      ].map((row, i) => (
+                        <tr key={i} className="border-b border-gray-100 hover:bg-gray-50">
+                          <td className="px-4 py-2 text-gray-700">{row.atv}</td>
+                          <td className="px-4 py-2">
+                            <span className={cn('text-[10px] font-bold px-2 py-0.5 rounded-full mr-2', row.badge === 'Sem ST' ? 'bg-blue-50 text-blue-700' : 'bg-purple-50 text-purple-700')}>{row.badge}</span>
+                            <span className="text-gray-500 text-[11px]">{row.desc}</span>
+                          </td>
+                          <td className="px-4 py-2 text-right font-mono font-semibold">{formatCurrency(row.v)}</td>
+                          <td className="px-4 py-2 text-right">{row.c}</td>
+                          <td className="px-4 py-2 text-right">{seg.total > 0 ? (row.v/seg.total*100).toFixed(2).replace('.',',') : '0,00'}%</td>
+                        </tr>
+                      ))}
                     </tbody>
                     <tfoot><tr className="bg-blue-50 font-bold text-blue-900">
-                      <td className="px-4 py-2" colSpan={2}>TOTAL GERAL DO PERÍODO</td>
+                      <td className="px-4 py-2" colSpan={2}>RECEITA BRUTA DO PERÍODO (vendas)</td>
                       <td className="px-4 py-2 text-right font-mono">{formatCurrency(seg.total)}</td>
-                      <td className="px-4 py-2 text-right">{authItems.length}</td>
+                      <td className="px-4 py-2 text-right">{authItems.length - seg.naoReceita.c}</td>
                       <td className="px-4 py-2 text-right">100,00%</td>
                     </tr></tfoot>
                   </table>
                 </CardContent>
               </Card>
 
-              {/* Nota orientativa */}
-              <div className="border-l-4 border-blue-500 bg-blue-50 rounded-r-xl px-5 py-4 text-sm text-blue-800">
-                <strong className="text-blue-900">📋 Como lançar no PGDAS-D (Simples Nacional):</strong>
-                <ol className="mt-2 space-y-1.5 pl-5 list-decimal leading-relaxed">
-                  <li>Acesse o PGDAS-D → <em>Atividades Econômicas com Receita no PA</em> → selecione <strong>Revenda de mercadorias, exceto para o exterior</strong>.</li>
-                  {seg.G1.v > 0 && <li><strong>Grupo 1 — Sem ST:</strong> informe o valor <strong>{formatCurrency(seg.G1.v)}</strong> na linha padrão. Deixe todos os campos de tributos em branco (tributação integral no DAS).</li>}
-                  {(seg.GA.v + seg.GB.v + seg.GC.v + seg.GD.v + seg.GE.v) > 0 && (
-                    <li><strong>Grupo 2 — Com ST/Monofásica:</strong> clique em <em>"+"</em> para adicionar novas linhas:
-                      <ul className="mt-1 pl-5 space-y-0.5 list-disc">
-                        {seg.GA.v > 0 && <li>Linha A: <strong>{formatCurrency(seg.GA.v)}</strong> → COFINS: Monofásico · ICMS: ST · PIS: Monofásico</li>}
-                        {seg.GB.v > 0 && <li>Linha B: <strong>{formatCurrency(seg.GB.v)}</strong> → ICMS: Substituição Tributária (demais em branco)</li>}
-                        {seg.GC.v > 0 && <li>Linha C: <strong>{formatCurrency(seg.GC.v)}</strong> → COFINS: Monofásico · PIS: Monofásico (ICMS em branco)</li>}
-                        {seg.GD.v > 0 && <li>Linha D: <strong>{formatCurrency(seg.GD.v)}</strong> → COFINS: ST · ICMS: ST · PIS: Substituição Tributária</li>}
-                        {seg.GE.v > 0 && <li>Linha E: <strong>{formatCurrency(seg.GE.v)}</strong> → COFINS: ST · PIS: Substituição Tributária (ICMS em branco)</li>}
-                      </ul>
-                    </li>
+              {/* Fora da receita */}
+              {(seg.naoReceita.c > 0 || devolucoesVenda.itens > 0) && (
+                <div className="border border-gray-200 bg-white rounded-xl px-5 py-3 text-xs text-gray-700 space-y-1.5">
+                  <p className="font-semibold text-gray-800">Fora da soma da receita</p>
+                  {devolucoesVenda.itens > 0 && (
+                    <p>
+                      <strong>Devoluções de venda no período: {formatCurrency(devolucoesVenda.valor)}</strong>{' '}
+                      ({devolucoesVenda.itens} item(ns)). Não foram somadas nem abatidas acima; pela regra do Simples
+                      devem ser deduzidas da receita do mês da devolução, no mesmo grupo da venda original (Res. CGSN
+                      140/2018, art. 17).
+                    </p>
                   )}
-                  <li>O PGDAS-D calculará o DAS <strong>descontando automaticamente</strong> os percentuais dos tributos marcados, evitando bitributação.</li>
-                </ol>
-              </div>
+                  {seg.naoReceita.c > 0 && (
+                    <p>
+                      <strong>Saídas que não são venda: {formatCurrency(seg.naoReceita.v)}</strong>{' '}
+                      ({seg.naoReceita.c} item(ns)) —{' '}
+                      {Object.entries(seg.naoReceita.cfops).sort((a, b) => b[1].v - a[1].v)
+                        .map(([cfop, x]) => `CFOP ${cfop}: ${formatCurrency(x.v)}`).join(' · ')}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Nota orientativa */}
+              {seg.total > 0 && (
+                <div className="border-l-4 border-blue-500 bg-blue-50 rounded-r-xl px-5 py-4 text-sm text-blue-800">
+                  <strong className="text-blue-900">📋 Como lançar no PGDAS-D (Simples Nacional):</strong>
+                  <ol className="mt-2 space-y-1.5 pl-5 list-decimal leading-relaxed">
+                    {(Object.keys(ATIVIDADES) as Atividade[]).map(atv => {
+                      const g = seg.atividades[atv]
+                      const ids = (Object.keys(GRUPOS) as GrupoId[]).filter(id => g[id].v > 0)
+                      if (ids.length === 0) return null
+                      return (
+                        <li key={atv}>
+                          Em <em>Atividades Econômicas com Receita no PA</em>, selecione <strong>{ATIVIDADES[atv]}</strong>:
+                          <ul className="mt-1 pl-5 space-y-0.5 list-disc">
+                            {ids.map(id => (
+                              <li key={id}>
+                                <strong>{formatCurrency(g[id].v)}</strong> — {id === 'G1' ? 'sem ST' : 'com ST/monofásica'} → {GRUPOS[id].lancar}
+                              </li>
+                            ))}
+                          </ul>
+                        </li>
+                      )
+                    })}
+                    <li>O PGDAS-D calculará o DAS <strong>descontando automaticamente</strong> os percentuais dos tributos marcados, evitando bitributação.</li>
+                  </ol>
+                </div>
+              )}
             </div>
           )}
         </>

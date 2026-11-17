@@ -55,8 +55,9 @@ export default function PisCofinsCfopCard({ data, isLoading }: { data?: PisCofin
           PIS/COFINS por CFOP — Normal, Substituição Tributária e Monofásico
         </CardTitle>
         <p className="text-xs text-gray-500 leading-relaxed">
-          Cada CFOP é dividido pelo regime que a <strong>lei define para o NCM</strong> do produto, não pelo que veio
-          marcado na nota. <strong>Normal</strong> paga PIS e COFINS integralmente; <strong>Subst. Tributária</strong> e{' '}
+          Saídas emitidas pela própria empresa. Cada CFOP é dividido pelo regime que a{' '}
+          <strong>lei define para o NCM</strong> do produto; quando o NCM não resolve, vale o CST da nota — a mesma
+          regra da Segregação PGDAS-D. <strong>Normal</strong> paga PIS e COFINS integralmente; <strong>Subst. Tributária</strong> e{' '}
           <strong>Monofásico</strong> já foram tributados na indústria ou no importador e devem ser segregados na
           apuração.
         </p>

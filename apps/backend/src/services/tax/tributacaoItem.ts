@@ -60,3 +60,26 @@ export const FILTRO_PRISMA_MONOFASICO = [
 export function isItemMonofasico(item: { ncm: string | null; cstPis: string | null; cstCofins: string | null }): boolean {
   return derivarTribPis(item.ncm, item.cstPis, item.cstCofins).tribPis === 'Tributação Monofásica'
 }
+
+// Atividade do PGDAS-D a que a saída pertence, pelo CFOP. null = saída que não é
+// receita bruta (devolução de compra, remessa, bonificação, transferência, ativo).
+export type AtividadePgdas = 'revenda' | 'industria' | 'revenda_exterior' | 'industria_exterior' | 'servico' | null
+
+const VENDA_PRODUCAO = ['101', '103', '105', '107', '109', '111', '113', '116', '118', '122', '124', '125', '401', '402', '651', '652', '653']
+const VENDA_TERCEIROS = ['102', '104', '106', '108', '110', '112', '114', '115', '117', '119', '120', '123', '251', '252', '253', '254', '255', '256', '257', '258', '403', '404', '405', '654', '655', '656', '667']
+const SERVICO = ['301', '302', '303', '304', '305', '306', '307', '351', '352', '353', '354', '355', '356', '357', '359', '360', '932', '933']
+const EXTERIOR_PRODUCAO = ['7101', '7105', '7127', '7651', '5501', '6501']
+const EXTERIOR_TERCEIROS = ['7102', '7106', '7501', '7654', '7667', '5502', '6502']
+
+export function atividadePgdas(cfop: string | null | undefined): AtividadePgdas {
+  const c = (cfop ?? '').replace(/\D/g, '')
+  if (c.length !== 4) return null
+  if (EXTERIOR_PRODUCAO.includes(c)) return 'industria_exterior'
+  if (EXTERIOR_TERCEIROS.includes(c)) return 'revenda_exterior'
+  if (c[0] !== '5' && c[0] !== '6') return null
+  const sufixo = c.slice(1)
+  if (VENDA_PRODUCAO.includes(sufixo)) return 'industria'
+  if (VENDA_TERCEIROS.includes(sufixo)) return 'revenda'
+  if (SERVICO.includes(sufixo)) return 'servico'
+  return null
+}

@@ -9,6 +9,7 @@ import {
   divergenciaPisCofins,
   isCfopSaida,
 } from '../services/tax/pisCofinsClassifier.js'
+import { derivarTribPis } from '../services/tax/tributacaoItem.js'
 
 const prisma = new PrismaClient()
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
@@ -428,7 +429,7 @@ Responda APENAS em JSON: {"status":"correto"|"incorreto"|"incerto","cfop_sugerid
     return reply.send({ items, summary, truncated: raw.length === 300 })
   })
 
-  // GET /api/tax/pis-cofins-cfop — receita por CFOP segregada em Normal / ST / Monofásico
+  // GET /api/tax/pis-cofins-cfop — saídas de emissão própria por CFOP, em Normal / ST / Monofásico
   app.get('/pis-cofins-cfop', { preHandler: [app.authenticate] }, async (req, reply) => {
     const { companyId, competencia } = req.query as { companyId?: string; competencia?: string }
 
@@ -449,7 +450,11 @@ Responda APENAS em JSON: {"status":"correto"|"incorreto"|"incerto","cfop_sugerid
         COALESCE(SUM(ni."vProd" - ni."vDesc")::float, 0) AS valor
       FROM nfe_items ni
       JOIN nfes n ON n.id = ni."nfeId"
+      JOIN companies c ON c.id = n."companyId"
       WHERE ${whereClause}
+        AND n."tpNF" = 1
+        AND left(ni.cfop, 1) IN ('5', '6', '7')
+        AND regexp_replace(n."emitCnpj", '[^0-9]', '', 'g') = regexp_replace(c.cnpj, '[^0-9]', '', 'g')
       GROUP BY ni.cfop, ni.ncm, ni."cstPis", ni."xProd"
     `
 
@@ -481,10 +486,13 @@ Responda APENAS em JSON: {"status":"correto"|"incorreto"|"incerto","cfop_sugerid
       const lei = classificarNcmPisCofins(r.ncm)
       const declarado = classificarCstPisCofins(r.cstPis)
       const div = divergenciaPisCofins(lei, r.cstPis, r.cfop)
+      // Mesma regra da Segregação PGDAS-D, para as duas telas fecharem.
+      const trib = derivarTribPis(r.ncm, r.cstPis).tribPis
+      const coluna = trib === 'Tributação Monofásica' ? 'monofasico' : trib === 'Substituição Tributária' ? 'st' : 'normal'
 
       for (const alvo of [linha, totais[direcao]]) {
         alvo.total += r.valor
-        alvo[lei.regime] += r.valor
+        alvo[coluna] += r.valor
         alvo.itens += r.count
         if (declarado === 'monofasico') alvo.monofasicoDeclarado += r.valor
         if (declarado === 'st') alvo.stDeclarado += r.valor
