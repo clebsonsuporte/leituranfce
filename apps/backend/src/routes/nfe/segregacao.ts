@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify'
 import prisma from '../../lib/prisma.js'
+import { derivarTribIcms, derivarTribPis } from '../../services/tax/tributacaoItem.js'
 
 const segregacaoRoutes: FastifyPluginAsync = async (fastify) => {
   // GET /nfe/segregacao/items?companyId=xxx&competencia=2026-02
@@ -82,7 +83,22 @@ const segregacaoRoutes: FastifyPluginAsync = async (fastify) => {
       orderBy: { dhEmi: 'asc' },
     })
 
-    return reply.send({ nfes, total: nfes.length })
+    // Classificação recalculada na leitura: notas importadas antes de uma mudança
+    // de regra não precisam ser reimportadas.
+    const classificadas = nfes.map(nfe => ({
+      ...nfe,
+      items: nfe.items.map(item => {
+        const pis = derivarTribPis(item.ncm, item.cstPis, item.cstCofins)
+        return {
+          ...item,
+          tribIcms: derivarTribIcms(item.cstIcms, item.csosnIcms),
+          tribPis: pis.tribPis,
+          tribAviso: pis.aviso,
+        }
+      }),
+    }))
+
+    return reply.send({ nfes: classificadas, total: classificadas.length })
   })
 }
 

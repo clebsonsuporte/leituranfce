@@ -517,7 +517,9 @@ Responda APENAS em JSON: {"status":"correto"|"incorreto"|"incerto","cfop_sugerid
     })
   })
 
-  // GET /api/tax/reforma/pendentes — notas de 2026+ cujo XML ainda não traz os grupos IBS/CBS
+  // GET /api/tax/reforma/pendentes — notas de 2026+ cujo XML ainda não traz os grupos IBS/CBS.
+  // Emitente do Simples Nacional/MEI (CRT 1, 2 ou 4) está dispensado do destaque em 2026
+  // (LC 214/2025, art. 348, III, "c"); essas notas contam como dispensadas, não pendentes.
   app.get('/reforma/pendentes', { preHandler: [app.authenticate] }, async (req, reply) => {
     const { companyId, competencia } = req.query as { companyId?: string; competencia?: string }
 
@@ -531,11 +533,12 @@ Responda APENAS em JSON: {"status":"correto"|"incorreto"|"incerto","cfop_sugerid
 
     const notas = await prisma.$queryRaw<Array<{
       id: string; mod: number; nNF: string; serie: string; dhEmi: Date; emitNome: string
-      vNF: number; propria: boolean; adequada: boolean
+      vNF: number; propria: boolean; adequada: boolean; competencia: string; crt: string | null
     }>>`
       SELECT
-        n.id, n.mod, n."nNF", n.serie, n."dhEmi", n."emitNome",
+        n.id, n.mod, n."nNF", n.serie, n."dhEmi", n."emitNome", n.competencia,
         n."vNF"::float AS "vNF",
+        substring(n."xmlRaw" from '<CRT>([0-9])</CRT>') AS crt,
         (regexp_replace(n."emitCnpj", '[^0-9]', '', 'g') = regexp_replace(c.cnpj, '[^0-9]', '', 'g')) AS propria,
         (n."xmlRaw" ~ '<IBSCBS[[:space:]>]'
           AND n."xmlRaw" LIKE '%<IBSCBSTot%'
@@ -546,7 +549,10 @@ Responda APENAS em JSON: {"status":"correto"|"incorreto"|"incerto","cfop_sugerid
       ORDER BY n."dhEmi" DESC
     `
 
-    const grupo = () => ({ total: 0, adequadas: 0, pendentes: 0, valorPendente: 0 })
+    const dispensada = (n: (typeof notas)[number]) =>
+      !n.adequada && n.competencia < '2027-01' && ['1', '2', '4'].includes(n.crt ?? '')
+
+    const grupo = () => ({ total: 0, adequadas: 0, pendentes: 0, dispensadas: 0, valorPendente: 0 })
     const resumo = { geral: grupo(), proprias: grupo(), terceiros: grupo(), nfe: grupo(), nfce: grupo() }
     for (const n of notas) {
       const alvos = [resumo.geral, n.propria ? resumo.proprias : resumo.terceiros]
@@ -555,19 +561,15 @@ Responda APENAS em JSON: {"status":"correto"|"incorreto"|"incerto","cfop_sugerid
       for (const g of alvos) {
         g.total++
         if (n.adequada) g.adequadas++
+        else if (dispensada(n)) g.dispensadas++
         else { g.pendentes++; g.valorPendente += n.vNF }
       }
     }
 
-    const company = companyId
-      ? await prisma.company.findUnique({ where: { id: companyId }, select: { regime: true } })
-      : null
-
     return reply.send({
       resumo,
-      regime: company?.regime ?? null,
-      pendentes: notas.filter(n => !n.adequada).slice(0, 50)
-        .map(({ adequada: _adequada, ...n }) => n),
+      pendentes: notas.filter(n => !n.adequada && !dispensada(n)).slice(0, 50)
+        .map(({ adequada: _adequada, competencia: _competencia, crt: _crt, ...n }) => n),
     })
   })
 

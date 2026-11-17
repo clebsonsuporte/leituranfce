@@ -32,7 +32,10 @@ interface NfeItem {
   vIPI: number
   tribIcms?: string
   tribPis?: string
+  tribAviso?: TribAviso
 }
+
+type TribAviso = 'reclassificado_ncm' | 'cst_sem_base' | 'possivel_monofasico' | null
 
 interface Nfe {
   id: string
@@ -89,6 +92,7 @@ interface FlatItem {
   // Derived
   tribPis: string
   tribIcms: string
+  tribAviso: TribAviso
   // NF-e totals (per-nota, not per-item)
   _vNF: number
   _vICMSnf: number
@@ -99,9 +103,8 @@ interface FlatItem {
 }
 
 // ─── CLASSIFICAÇÃO ──────────────────────────────────────────────────────────
-// tribIcms/tribPis agora vêm calculados pelo backend (parser.ts), fonte única
-// de verdade — evita divergência entre o que é gravado no banco e o que é
-// exibido aqui.
+// tribIcms/tribPis vêm calculados pelo backend (services/tax/tributacaoItem.ts),
+// fonte única: PIS/COFINS pelo NCM do produto e, na falta, pelo CST da nota.
 
 // ─── FLATTEN NF-e → items ────────────────────────────────────────────────────
 
@@ -137,6 +140,7 @@ function flattenNfes(nfes: Nfe[]): FlatItem[] {
         vCOFINS: Number(item.vCOFINS),
         tribPis: item.tribPis || 'Tributado',
         tribIcms: item.tribIcms || 'Tributado',
+        tribAviso: item.tribAviso ?? null,
         _vNF: Number(nfe.vNF),
         _vICMSnf: Number(nfe.vICMS),
         _vSTnf: Number(nfe.vICMSST),
@@ -162,26 +166,34 @@ function buildSegregacao(items: FlatItem[]) {
   const auth = items.filter(i => i.sit !== 'CANCELADO')
   const G1: SegGroup = { v: 0, c: 0, label: 'Grupo 1', desc: 'Sem ST / Monofásica — tributação integral no DAS' }
   const GA: SegGroup = { v: 0, c: 0, label: 'Grupo 2-A', desc: 'PIS/COFINS Monofásico + ICMS com ST — COFINS, ICMS e PIS excluídos do DAS' }
-  const GB: SegGroup = { v: 0, c: 0, label: 'Grupo 2-B', desc: 'ICMS com ST (PIS/COFINS tributado normal) — apenas ICMS excluído do DAS' }
-  const GC: SegGroup = { v: 0, c: 0, label: 'Grupo 2-C', desc: 'PIS/COFINS Monofásico (ICMS tributado normal) — COFINS e PIS excluídos do DAS' }
+  const GB: SegGroup = { v: 0, c: 0, label: 'Grupo 2-B', desc: 'ICMS com ST (PIS/COFINS no DAS) — apenas ICMS excluído do DAS' }
+  const GC: SegGroup = { v: 0, c: 0, label: 'Grupo 2-C', desc: 'PIS/COFINS Monofásico (ICMS no DAS) — COFINS e PIS excluídos do DAS' }
   const GD: SegGroup = { v: 0, c: 0, label: 'Grupo 2-D', desc: 'PIS/COFINS por ST + ICMS com ST — COFINS, ICMS e PIS excluídos do DAS' }
+  const GE: SegGroup = { v: 0, c: 0, label: 'Grupo 2-E', desc: 'PIS/COFINS por ST (ICMS no DAS) — COFINS e PIS excluídos do DAS' }
+  const avisos: Record<Exclude<TribAviso, null>, { v: number; c: number }> = {
+    reclassificado_ncm: { v: 0, c: 0 },
+    cst_sem_base: { v: 0, c: 0 },
+    possivel_monofasico: { v: 0, c: 0 },
+  }
 
   for (const it of auth) {
     const isMono  = it.tribPis === 'Tributação Monofásica'
     const isSTpis = it.tribPis === 'Substituição Tributária'
+    // Só o substituído (ICMS já retido) sai do DAS; o substituto recolhe o ICMS próprio no Simples.
     const isSTicms= it.tribIcms === 'Substituição Tributária'
-    const isTrib  = it.tribPis === 'Tributado'
     const v = it.vProd
 
-    if (isMono && isSTicms)       { GA.v += v; GA.c++ }
-    else if (isTrib && isSTicms)  { GB.v += v; GB.c++ }
-    else if (isMono && !isSTicms) { GC.v += v; GC.c++ }
-    else if (isSTpis && isSTicms) { GD.v += v; GD.c++ }
-    else                          { G1.v += v; G1.c++ }
+    const g = isMono ? (isSTicms ? GA : GC)
+      : isSTpis ? (isSTicms ? GD : GE)
+      : isSTicms ? GB
+      : G1
+    g.v += v; g.c++
+
+    if (it.tribAviso) { avisos[it.tribAviso].v += v; avisos[it.tribAviso].c++ }
   }
 
   const total = auth.reduce((s, i) => s + i.vProd, 0)
-  return { G1, GA, GB, GC, GD, total }
+  return { G1, GA, GB, GC, GD, GE, avisos, total }
 }
 
 // ─── CSV EXPORT ──────────────────────────────────────────────────────────────
@@ -218,7 +230,7 @@ function exportCSV(type: 'items' | 'notas' | 'seg', data: FlatItem[], nfes: Nfe[
       fmtN(Number(n.vPIS)), fmtN(Number(n.vCOFINS)), n.chNFe
     ])
   } else {
-    const { G1, GA, GB, GC, GD } = buildSegregacao(data)
+    const { G1, GA, GB, GC, GD, GE } = buildSegregacao(data)
     header = ['Grupo PGDAS-D','Receita (R$)','COFINS','CSLL','ICMS','INSS/CPP','IRPJ','PIS','Qtd.Itens']
     rows = [
       G1.v > 0 ? ['Grupo 1 – Sem ST/Monofásica', fmtN(G1.v), '', '', '', '', '', '', G1.c] : null,
@@ -226,6 +238,7 @@ function exportCSV(type: 'items' | 'notas' | 'seg', data: FlatItem[], nfes: Nfe[
       GB.v > 0 ? ['Grupo 2-B – Tributado+ST', fmtN(GB.v), '', '', 'Substituição Tributária', '', '', '', GB.c] : null,
       GC.v > 0 ? ['Grupo 2-C – Mono+Tributado', fmtN(GC.v), 'Tributação Monofásica', '', '', '', '', 'Tributação Monofásica', GC.c] : null,
       GD.v > 0 ? ['Grupo 2-D – ST+ST', fmtN(GD.v), 'Substituição Tributária', '', 'Substituição Tributária', '', '', 'Substituição Tributária', GD.c] : null,
+      GE.v > 0 ? ['Grupo 2-E – ST PIS/COFINS', fmtN(GE.v), 'Substituição Tributária', '', '', '', '', 'Substituição Tributária', GE.c] : null,
     ].filter(Boolean) as (string | number)[][]
   }
 
@@ -243,6 +256,7 @@ const TRIB_COLORS: Record<string, string> = {
   'Tributação Monofásica': 'bg-teal-50 text-teal-700 border border-teal-200',
   'Simples Nacional': 'bg-green-50 text-green-700 border border-green-200',
   'Substituição Tributária': 'bg-purple-50 text-purple-700 border border-purple-200',
+  'Substituto Tributário': 'bg-indigo-50 text-indigo-700 border border-indigo-200',
   'Isento/NT': 'bg-gray-100 text-gray-600 border border-gray-200',
 }
 
@@ -715,6 +729,36 @@ export default function SegregacaoPage() {
           {/* ── ABA SEGREGAÇÃO PGDAS-D ── */}
           {tab === 'seg' && (
             <div className="space-y-4">
+              <div className="border border-gray-200 bg-white rounded-xl px-5 py-3 text-xs text-gray-700 space-y-1.5">
+                <p className="font-semibold text-gray-800">Como os itens foram classificados</p>
+                <p>
+                  <strong>PIS/COFINS:</strong> pelo regime que a lei define para o NCM do produto (monofásico ou
+                  substituição tributária); quando o NCM não resolve, vale o CST da nota (04 = monofásico, 05 = ST).
+                  Alíquota zero, isenção e suspensão (CST 06 a 09) continuam no DAS.{' '}
+                  <strong>ICMS:</strong> só sai do DAS a venda como substituído (CSOSN 500 / CST 60); a venda como
+                  substituto (CSOSN 201, 202, 203) fica no Grupo 1, com o ICMS próprio no DAS.
+                </p>
+                {seg.avisos.reclassificado_ncm.c > 0 && (
+                  <p className="text-teal-800">
+                    {seg.avisos.reclassificado_ncm.c} item(ns), {formatCurrency(seg.avisos.reclassificado_ncm.v)}:
+                    monofásico/ST pelo NCM, embora a nota não traga CST 04/05 — segregados conforme a lei.
+                  </p>
+                )}
+                {seg.avisos.cst_sem_base.c > 0 && (
+                  <p className="text-amber-800">
+                    {seg.avisos.cst_sem_base.c} item(ns), {formatCurrency(seg.avisos.cst_sem_base.v)}: nota com CST
+                    04/05, mas o NCM não consta nas listas da lei — mantidos como na nota; conferir na Auditoria
+                    Tributária.
+                  </p>
+                )}
+                {seg.avisos.possivel_monofasico.c > 0 && (
+                  <p className="text-amber-800">
+                    {seg.avisos.possivel_monofasico.c} item(ns), {formatCurrency(seg.avisos.possivel_monofasico.v)}:
+                    NCM que pode ser monofásico dependendo do "Ex" da TIPI — mantidos como tributados; conferir.
+                  </p>
+                )}
+              </div>
+
               {/* Bloco 1: Sem ST */}
               <SegBlock
                 titulo="Revenda de mercadorias, exceto para o exterior"
@@ -741,9 +785,10 @@ export default function SegregacaoPage() {
                   seg.GB.v > 0 ? { receita: seg.GB.v, itens: seg.GB.c, pct: seg.total > 0 ? seg.GB.v/seg.total*100 : 0, cofins: null, csll: null, icms: 'st', inss: null, irpj: null, pis: null } : null,
                   seg.GC.v > 0 ? { receita: seg.GC.v, itens: seg.GC.c, pct: seg.total > 0 ? seg.GC.v/seg.total*100 : 0, cofins: 'mono', csll: null, icms: null, inss: null, irpj: null, pis: 'mono' } : null,
                   seg.GD.v > 0 ? { receita: seg.GD.v, itens: seg.GD.c, pct: seg.total > 0 ? seg.GD.v/seg.total*100 : 0, cofins: 'st', csll: null, icms: 'st', inss: null, irpj: null, pis: 'st' } : null,
+                  seg.GE.v > 0 ? { receita: seg.GE.v, itens: seg.GE.c, pct: seg.total > 0 ? seg.GE.v/seg.total*100 : 0, cofins: 'st', csll: null, icms: null, inss: null, irpj: null, pis: 'st' } : null,
                 ].filter(Boolean) as SegRow[]}
-                total={seg.GA.v + seg.GB.v + seg.GC.v + seg.GD.v}
-                totalItens={seg.GA.c + seg.GB.c + seg.GC.c + seg.GD.c}
+                total={seg.GA.v + seg.GB.v + seg.GC.v + seg.GD.v + seg.GE.v}
+                totalItens={seg.GA.c + seg.GB.c + seg.GC.c + seg.GD.c + seg.GE.c}
                 totalGeral={seg.total}
                 totalLabel="Total Grupo 2"
               />
@@ -762,9 +807,10 @@ export default function SegregacaoPage() {
                       {[
                         seg.G1.v > 0 && { badge: 'Grupo 1', color: 'bg-blue-50 text-blue-700', desc: 'Sem ST / Monofásica — tributação integral no DAS', v: seg.G1.v, c: seg.G1.c },
                         seg.GA.v > 0 && { badge: 'Grupo 2-A', color: 'bg-purple-50 text-purple-700', desc: 'PIS/COFINS Monofásico + ICMS com ST', v: seg.GA.v, c: seg.GA.c },
-                        seg.GB.v > 0 && { badge: 'Grupo 2-B', color: 'bg-purple-50 text-purple-700', desc: 'ICMS com ST (PIS/COFINS tributado normal)', v: seg.GB.v, c: seg.GB.c },
-                        seg.GC.v > 0 && { badge: 'Grupo 2-C', color: 'bg-purple-50 text-purple-700', desc: 'PIS/COFINS Monofásico (ICMS tributado normal)', v: seg.GC.v, c: seg.GC.c },
+                        seg.GB.v > 0 && { badge: 'Grupo 2-B', color: 'bg-purple-50 text-purple-700', desc: 'ICMS com ST (PIS/COFINS no DAS)', v: seg.GB.v, c: seg.GB.c },
+                        seg.GC.v > 0 && { badge: 'Grupo 2-C', color: 'bg-purple-50 text-purple-700', desc: 'PIS/COFINS Monofásico (ICMS no DAS)', v: seg.GC.v, c: seg.GC.c },
                         seg.GD.v > 0 && { badge: 'Grupo 2-D', color: 'bg-purple-50 text-purple-700', desc: 'PIS/COFINS por ST + ICMS com ST', v: seg.GD.v, c: seg.GD.c },
+                        seg.GE.v > 0 && { badge: 'Grupo 2-E', color: 'bg-purple-50 text-purple-700', desc: 'PIS/COFINS por ST (ICMS no DAS)', v: seg.GE.v, c: seg.GE.c },
                       ].filter(Boolean).map((r, i) => {
                         const row = r as { badge: string; color: string; desc: string; v: number; c: number }
                         return (
@@ -794,13 +840,14 @@ export default function SegregacaoPage() {
                 <ol className="mt-2 space-y-1.5 pl-5 list-decimal leading-relaxed">
                   <li>Acesse o PGDAS-D → <em>Atividades Econômicas com Receita no PA</em> → selecione <strong>Revenda de mercadorias, exceto para o exterior</strong>.</li>
                   {seg.G1.v > 0 && <li><strong>Grupo 1 — Sem ST:</strong> informe o valor <strong>{formatCurrency(seg.G1.v)}</strong> na linha padrão. Deixe todos os campos de tributos em branco (tributação integral no DAS).</li>}
-                  {(seg.GA.v + seg.GB.v + seg.GC.v + seg.GD.v) > 0 && (
+                  {(seg.GA.v + seg.GB.v + seg.GC.v + seg.GD.v + seg.GE.v) > 0 && (
                     <li><strong>Grupo 2 — Com ST/Monofásica:</strong> clique em <em>"+"</em> para adicionar novas linhas:
                       <ul className="mt-1 pl-5 space-y-0.5 list-disc">
                         {seg.GA.v > 0 && <li>Linha A: <strong>{formatCurrency(seg.GA.v)}</strong> → COFINS: Monofásico · ICMS: ST · PIS: Monofásico</li>}
                         {seg.GB.v > 0 && <li>Linha B: <strong>{formatCurrency(seg.GB.v)}</strong> → ICMS: Substituição Tributária (demais em branco)</li>}
                         {seg.GC.v > 0 && <li>Linha C: <strong>{formatCurrency(seg.GC.v)}</strong> → COFINS: Monofásico · PIS: Monofásico (ICMS em branco)</li>}
                         {seg.GD.v > 0 && <li>Linha D: <strong>{formatCurrency(seg.GD.v)}</strong> → COFINS: ST · ICMS: ST · PIS: Substituição Tributária</li>}
+                        {seg.GE.v > 0 && <li>Linha E: <strong>{formatCurrency(seg.GE.v)}</strong> → COFINS: ST · PIS: Substituição Tributária (ICMS em branco)</li>}
                       </ul>
                     </li>
                   )}

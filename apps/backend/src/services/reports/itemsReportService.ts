@@ -1,6 +1,7 @@
 import prisma from '../../lib/prisma.js'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
+import { FILTRO_PRISMA_MONOFASICO, isItemMonofasico } from '../tax/tributacaoItem.js'
 
 function fmtCur(val: number | string | null | undefined): string {
   return Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -333,7 +334,7 @@ export async function generatePisCofinsItemsReport(
   if (cfops.length > 0) whereItem.cfop = { in: cfops }
 
   if (tributacao === 'monofasico') {
-    whereItem.cstPis = { in: ['04', '05', '06', '07', '08', '09', '70', '71', '72', '73', '74', '75'] }
+    whereItem.OR = FILTRO_PRISMA_MONOFASICO
   } else if (tributacao === 'st') {
     whereItem.OR = [
       { csosnIcms: { in: ['500', '201', '202', '203'] } },
@@ -341,12 +342,13 @@ export async function generatePisCofinsItemsReport(
     ]
   }
 
-  const items = await prisma.nfeItem.findMany({
+  const found = await prisma.nfeItem.findMany({
     where: whereItem,
     include: { nfe: { select: { nNF: true, dhEmi: true, emitNome: true, emitCnpj: true, mod: true } } },
     orderBy: [{ nfe: { dhEmi: 'asc' } }, { nfe: { nNF: 'asc' } }, { nItem: 'asc' }],
     take: 100000,
   })
+  const items = tributacao === 'monofasico' ? found.filter(isItemMonofasico) : found
 
   const company = filters.companyId
     ? await prisma.company.findUnique({ where: { id: filters.companyId } })
@@ -360,7 +362,7 @@ export async function generatePisCofinsItemsReport(
 
   const cfopLabel = cfops.length > 0 ? cfops.map(c => c.replace('.', '.')).join(', ') : 'Todos'
   const tributacaoLabel = tributacao === 'monofasico'
-    ? '04-Operação Tributável Monofásica - Revenda Alíquota Zero'
+    ? 'Tributação Monofásica (pelo NCM ou CST 04 - Revenda a Alíquota Zero)'
     : tributacao === 'st'
       ? 'Substituição Tributária (ICMS-ST)'
       : 'Todos'

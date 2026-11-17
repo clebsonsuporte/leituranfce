@@ -104,6 +104,8 @@ const REGRAS: Regra[] = [
   },
 ]
 
+export const PREFIXOS_NCM_MONOFASICO = REGRAS.filter(r => r.regime === 'monofasico').flatMap(r => r.prefixos)
+
 export interface ClassificacaoNcm {
   regime: RegimePisCofins
   grupo: string | null

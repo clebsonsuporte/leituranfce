@@ -13,20 +13,21 @@ export default function ReformaPendenteCard({ data, isLoading }: { data?: Reform
 
   const { geral, proprias, terceiros, nfe, nfce } = data.resumo
   const semNotas = geral.total === 0
-  const tudoOk = !semNotas && geral.pendentes === 0
-  const simples = (data.regime ?? '').toLowerCase().includes('simples')
-  const tom = semNotas
-    ? 'border-gray-200 bg-white'
-    : tudoOk ? 'border-green-200 bg-green-50/50' : 'border-amber-300 bg-amber-50/60'
+  const temPendencia = geral.pendentes > 0
+  const temDispensa = geral.dispensadas > 0
+  const tom = semNotas ? 'border-gray-200 bg-white'
+    : temPendencia ? 'border-amber-300 bg-amber-50/60'
+    : temDispensa ? 'border-blue-200 bg-blue-50/50'
+    : 'border-green-200 bg-green-50/50'
 
   return (
     <Card className={tom}>
       <CardContent className="p-5 space-y-3">
         <div className="flex items-start gap-3">
-          <div className={`h-10 w-10 rounded-lg flex items-center justify-center shrink-0 ${tudoOk ? 'bg-green-100' : 'bg-amber-100'}`}>
-            {tudoOk
-              ? <CheckCircle2 className="h-5 w-5 text-green-600" />
-              : <Landmark className="h-5 w-5 text-amber-700" />}
+          <div className={`h-10 w-10 rounded-lg flex items-center justify-center shrink-0 ${temPendencia ? 'bg-amber-100' : temDispensa ? 'bg-blue-100' : 'bg-green-100'}`}>
+            {temPendencia || temDispensa || semNotas
+              ? <Landmark className={`h-5 w-5 ${temPendencia ? 'text-amber-700' : 'text-blue-700'}`} />
+              : <CheckCircle2 className="h-5 w-5 text-green-600" />}
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-gray-800">Reforma Tributária — notas sem IBS/CBS</p>
@@ -34,11 +35,7 @@ export default function ReformaPendenteCard({ data, isLoading }: { data?: Reform
               <p className="text-sm text-gray-500 mt-0.5">
                 Nenhuma nota de 2026 em diante no período selecionado — nada a verificar.
               </p>
-            ) : tudoOk ? (
-              <p className="text-sm text-green-800 mt-0.5">
-                Todas as {geral.total} nota(s) do período já trazem os grupos IBS/CBS e o cClassTrib.
-              </p>
-            ) : (
+            ) : temPendencia ? (
               <>
                 <p className="mt-0.5">
                   <span className="text-2xl font-bold text-amber-800">{geral.pendentes}</span>
@@ -46,15 +43,32 @@ export default function ReformaPendenteCard({ data, isLoading }: { data?: Reform
                   <span className="text-sm text-gray-500"> · {formatCurrency(geral.valorPendente)}</span>
                 </p>
                 <p className="text-xs text-gray-600 mt-1">
-                  XML sem os grupos <code>IBSCBS</code>, <code>IBSCBSTot</code> ou <code>cClassTrib</code> (NT
-                  2025.002-RTC).
+                  Emitente obrigado ao destaque, mas o XML não traz <code>IBSCBS</code>, <code>IBSCBSTot</code> ou{' '}
+                  <code>cClassTrib</code>. A NT 2025.002-RTC v1.40 prevê rejeição da nota sem essas informações a
+                  partir de 03/08/2026.
                 </p>
               </>
+            ) : temDispensa ? (
+              <p className="text-sm text-blue-900 mt-0.5">
+                Nenhuma pendência exigível hoje no período.
+              </p>
+            ) : (
+              <p className="text-sm text-green-800 mt-0.5">
+                Todas as {geral.total} nota(s) do período já trazem os grupos IBS/CBS e o cClassTrib.
+              </p>
             )}
           </div>
         </div>
 
-        {!semNotas && !tudoOk && (
+        {temDispensa && (
+          <p className="text-xs text-blue-900 rounded-lg border border-blue-200 bg-white px-3 py-2">
+            <strong>{geral.dispensadas} nota(s)</strong> de emitente do Simples Nacional/MEI sem IBS/CBS —{' '}
+            <strong>dispensadas em 2026</strong> (LC 214/2025, art. 348, III, "c"). O destaque passa a ser exigido em
+            2027: programe a atualização do sistema emissor (ERP/PDV) antes da virada do ano.
+          </p>
+        )}
+
+        {temPendencia && (
           <>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
               <Quadro titulo="Emitidas pela empresa" pend={proprias.pendentes} total={proprias.total} destaque />
@@ -65,9 +79,8 @@ export default function ReformaPendenteCard({ data, isLoading }: { data?: Reform
 
             <p className="text-xs text-gray-600">
               {proprias.pendentes > 0
-                ? 'As notas emitidas pela própria empresa dependem de atualizar o sistema emissor (ERP/PDV). '
-                : 'As pendências são de notas recebidas — o ajuste é no emissor do fornecedor. '}
-              {simples && 'Empresa no Simples Nacional: confirme com o contador a data em que o destaque passa a ser exigido para o regime.'}
+                ? 'As notas emitidas pela própria empresa dependem de atualizar o sistema emissor (ERP/PDV).'
+                : 'As pendências são de notas recebidas — o ajuste é no emissor do fornecedor.'}
             </p>
 
             <button

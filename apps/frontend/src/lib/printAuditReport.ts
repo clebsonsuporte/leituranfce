@@ -108,7 +108,7 @@ export function printAuditReport(p: PrintParams) {
     p.escopo !== 'pis-cofins' ? tabelaItens(items, p.cfopValidations) : '',
     p.escopo !== 'itens' && p.pisCofins ? tabelaCfop(p.pisCofins) : '',
     reforma && reforma.total > 0
-      ? `<h2>Reforma Tributária</h2><p>${reforma.pendentes} de ${reforma.total} nota(s) do período sem os grupos IBS/CBS no XML (NT 2025.002-RTC).</p>`
+      ? `<h2>Reforma Tributária</h2><p>${reforma.pendentes} de ${reforma.total} nota(s) do período com emitente obrigado e sem os grupos IBS/CBS no XML (NT 2025.002-RTC).${reforma.dispensadas > 0 ? ` Outras ${reforma.dispensadas} nota(s) são de emitente do Simples Nacional/MEI, dispensado do destaque em 2026.` : ''}</p>`
       : '',
   ].join('')
 

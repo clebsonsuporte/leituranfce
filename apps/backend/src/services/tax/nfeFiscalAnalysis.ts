@@ -16,6 +16,7 @@ import {
   REFORMA_TRIBUTARIA,
   descreverCfop,
 } from './taxData.js'
+import { derivarTribIcms, derivarTribPis } from './tributacaoItem.js'
 
 interface NfeItemInput {
   nItem: number
@@ -124,7 +125,7 @@ export function analisarFiscalNfe(nfe: NfeInput) {
         cstDescricao: item.cstIcms ? CST_ICMS_DESCRICOES[item.cstIcms] ?? null : null,
         csosn: item.csosnIcms,
         csosnDescricao: item.csosnIcms ? CSOSN_DESCRICOES[item.csosnIcms] ?? null : null,
-        tributacao: item.tribIcms,
+        tributacao: derivarTribIcms(item.cstIcms, item.csosnIcms),
         vBC: Number(item.vBCIcms ?? 0),
         aliquota: Number(item.pICMS ?? 0),
         valor: Number(item.vICMS ?? 0),
@@ -133,7 +134,7 @@ export function analisarFiscalNfe(nfe: NfeInput) {
       pis: {
         cst: item.cstPis,
         cstDescricao: item.cstPis ? CST_PIS_COFINS_DESCRICOES[item.cstPis] ?? null : null,
-        tributacao: item.tribPis,
+        tributacao: derivarTribPis(item.ncm, item.cstPis, item.cstCofins).tribPis,
         valor: Number(item.vPIS ?? 0),
       },
       cofins: {

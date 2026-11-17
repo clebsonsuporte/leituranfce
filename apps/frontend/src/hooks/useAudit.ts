@@ -61,12 +61,12 @@ interface ReformaGrupo {
   total: number
   adequadas: number
   pendentes: number
+  dispensadas: number
   valorPendente: number
 }
 
 export interface ReformaPendentesData {
   resumo: Record<'geral' | 'proprias' | 'terceiros' | 'nfe' | 'nfce', ReformaGrupo>
-  regime: string | null
   pendentes: Array<{
     id: string
     mod: number

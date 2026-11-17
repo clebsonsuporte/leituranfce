@@ -8,6 +8,7 @@ import {
   generateNfceCsosnReport,
 } from '../services/reports/itemsReportService.js'
 import { exportXmlZip } from '../services/reports/xmlExportService.js'
+import { FILTRO_PRISMA_MONOFASICO, isItemMonofasico } from '../services/tax/tributacaoItem.js'
 
 // In-memory store for generated reports (in production use Redis or S3)
 const reportStore = new Map<
@@ -264,7 +265,7 @@ async function generateItemsCsv(
 
   // Filter by tributacao type
   if (tributacao === 'monofasico') {
-    whereItem.cstPis = { in: ['04', '05', '06', '07', '08', '09', '70', '71', '72', '73', '74', '75'] }
+    whereItem.OR = FILTRO_PRISMA_MONOFASICO
   } else if (tributacao === 'st') {
     whereItem.OR = [
       { csosnIcms: { in: ['500', '201', '202', '203'] } },
@@ -272,12 +273,13 @@ async function generateItemsCsv(
     ]
   }
 
-  const items = await prisma.nfeItem.findMany({
+  const found = await prisma.nfeItem.findMany({
     where: whereItem,
     include: { nfe: { select: { nNF: true, dhEmi: true, competencia: true } } },
     orderBy: [{ nfe: { dhEmi: 'asc' } }, { nfe: { nNF: 'asc' } }],
     take: 100000,
   })
+  const items = tributacao === 'monofasico' ? found.filter(isItemMonofasico) : found
 
   const headers = ['Nota', 'Data', 'Cód.', 'Produto', 'Qtd', 'V.Unitário', 'V.Total',
     'Bas.Cal.COFINS', 'Aliq.COFINS', 'V.COFINS', 'Bas.Cal.PIS', 'Aliq.PIS', 'V.PIS', 'V.PIS/COFINS',

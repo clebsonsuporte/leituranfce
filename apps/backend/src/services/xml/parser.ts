@@ -1,5 +1,6 @@
 import { XMLParser } from 'fast-xml-parser'
 import { createHash } from 'crypto'
+import { derivarTribIcms, derivarTribPis } from '../tax/tributacaoItem.js'
 
 export interface ParsedNfeItem {
   nItem: number
@@ -181,38 +182,6 @@ function extractIcms(icmsNode: Record<string, unknown>): {
   }
 }
 
-// Classificação tributária derivada por item, usada na Segregação PGDAS-D
-// (fechamento do Simples Nacional). Regras consolidadas a partir do motor
-// de tributação de referência do usuário (CSOSN/CST oficiais da NF-e).
-const CSOSN_SUBSTITUICAO = ['500', '201', '202', '203', '10', '30', '60', '70']
-const CST_SUBSTITUICAO = ['10', '30', '60', '70']
-const CSOSN_SIMPLES = ['101', '102', '103', '300', '400', '900']
-const CSOSN_ISENTO = ['40', '41', '50']
-const CST_ISENTO = ['40', '41', '50']
-const CST_TRIBUTADO = ['00', '20']
-
-function deriveTribIcms(cstIcms: string | undefined, csosn: string | undefined): string {
-  if (csosn && CSOSN_SUBSTITUICAO.includes(csosn)) return 'Substituição Tributária'
-  if (cstIcms && CST_SUBSTITUICAO.includes(cstIcms)) return 'Substituição Tributária'
-  if (csosn && CSOSN_SIMPLES.includes(csosn)) return 'Simples Nacional'
-  if (csosn && CSOSN_ISENTO.includes(csosn)) return 'Isento/NT'
-  if (cstIcms && CST_ISENTO.includes(cstIcms)) return 'Isento/NT'
-  if (cstIcms && CST_TRIBUTADO.includes(cstIcms)) return 'Tributado'
-  return 'Tributado'
-}
-
-const CST_PISCOFINS_MONOFASICO = ['70', '71', '72', '73', '74', '75']
-const CST_PISCOFINS_ISENTO = ['04', '05', '06', '07', '08', '09']
-const CST_PISCOFINS_ST = ['49', '50']
-
-function deriveTribPis(cstPis: string | undefined, cstCofins: string | undefined): string {
-  const cst = cstPis || cstCofins || ''
-  if (CST_PISCOFINS_MONOFASICO.includes(cst)) return 'Tributação Monofásica'
-  if (CST_PISCOFINS_ISENTO.includes(cst)) return 'Isento/NT'
-  if (CST_PISCOFINS_ST.includes(cst)) return 'Substituição Tributária'
-  return 'Tributado'
-}
-
 function parseItem(det: Record<string, unknown>, index: number): ParsedNfeItem {
   const nItem = toNum((det as Record<string, unknown>)['@_nItem']) || index + 1
   const prod = (det.prod || {}) as Record<string, unknown>
@@ -266,8 +235,8 @@ function parseItem(det: Record<string, unknown>, index: number): ParsedNfeItem {
     cstCofins,
     vCOFINS,
     vIPI,
-    tribIcms: deriveTribIcms(icmsData.cst, icmsData.csosn),
-    tribPis: deriveTribPis(cstPis, cstCofins),
+    tribIcms: derivarTribIcms(icmsData.cst, icmsData.csosn),
+    tribPis: derivarTribPis(toStr(prod.NCM), cstPis, cstCofins).tribPis,
   }
 }
 
